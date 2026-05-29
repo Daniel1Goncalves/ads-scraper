@@ -11,6 +11,108 @@ async function getBrowser() {
   })
 }
 
+async function extractAdsFromPage(page) {
+  return page.evaluate(() => {
+    const results = []
+
+    // Estratégia 1: data-testid oficial
+    let cards = Array.from(document.querySelectorAll('[data-testid="ad-archive-render-ad-card"]'))
+
+    // Estratégia 2: divs grandes que contêm links do Facebook + imagens
+    if (cards.length === 0) {
+      const allDivs = Array.from(document.querySelectorAll('div'))
+      cards = allDivs.filter(div => {
+        const hasFbLink = div.querySelector('a[href*="facebook.com"]')
+        const hasImg = div.querySelector('img')
+        const rect = div.getBoundingClientRect()
+        const isCard = rect.height > 150 && rect.height < 2000 && rect.width > 200
+        return hasFbLink && hasImg && isCard
+      }).filter((div, i, arr) => {
+        // Remove divs que são filhos de outros já selecionados
+        return !arr.some(other => other !== div && other.contains(div))
+      })
+    }
+
+    // Estratégia 3: qualquer elemento com texto de anúncio
+    if (cards.length === 0) {
+      const candidates = Array.from(document.querySelectorAll('div[role="article"], div[class*="ad"], section'))
+      cards = candidates.filter(el => {
+        const text = el.textContent || ''
+        return text.length > 100 && el.querySelector('a[href*="facebook.com"]')
+      })
+    }
+
+    cards.forEach((card, index) => {
+      try {
+        // Nome da página
+        let pageName = ''
+        const strong = card.querySelector('strong')
+        if (strong) pageName = strong.textContent.trim()
+
+        if (!pageName) {
+          const links = Array.from(card.querySelectorAll('a[href*="facebook.com"]'))
+          for (const link of links) {
+            const text = link.textContent.trim()
+            if (text.length > 2 && text.length < 100 && !text.includes('http')) {
+              pageName = text
+              break
+            }
+          }
+        }
+
+        // URL da página
+        let pageUrl = ''
+        const pageLink = card.querySelector('a[href*="facebook.com"]')
+        if (pageLink) pageUrl = pageLink.href
+
+        // Texto do anúncio
+        let adText = ''
+        const allText = Array.from(card.querySelectorAll('span, p, div'))
+        for (const el of allText) {
+          const t = el.textContent.trim()
+          if (t.length > 80 && t.length < 3000 && el.children.length < 5) {
+            if (t.length > adText.length) adText = t.slice(0, 500)
+          }
+        }
+
+        // Thumbnail
+        let thumbnail = ''
+        const imgs = Array.from(card.querySelectorAll('img'))
+        for (const img of imgs) {
+          if (img.src && img.src.startsWith('http') && img.width > 50) {
+            thumbnail = img.src
+            break
+          }
+        }
+
+        // URL da landing page
+        let landingUrl = ''
+        Array.from(card.querySelectorAll('a[href]')).forEach(link => {
+          const href = link.href
+          if (href && !href.includes('facebook.com') && !href.includes('instagram.com') && href.startsWith('http')) {
+            landingUrl = href
+          }
+        })
+
+        // Data
+        let dateText = ''
+        Array.from(card.querySelectorAll('span, div')).forEach(el => {
+          const t = el.textContent.trim()
+          if (t.match(/\d+\s*(dia|semana|m[eê]s|week|month|day)/i) && t.length < 80) {
+            dateText = t
+          }
+        })
+
+        if (pageName && pageName.length > 1) {
+          results.push({ pageName, pageUrl, adText, dateText, thumbnail, landingUrl, index })
+        }
+      } catch (e) {}
+    })
+
+    return { results, totalCards: cards.length }
+  })
+}
+
 // Busca por keyword na biblioteca do Meta
 app.get('/buscar', async (req, res) => {
   const { q } = req.query
@@ -22,63 +124,24 @@ app.get('/buscar', async (req, res) => {
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       locale: 'pt-BR',
+      viewport: { width: 1280, height: 800 },
     })
     const page = await context.newPage()
 
     const url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&q=${encodeURIComponent(q)}&search_type=keyword_unordered`
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 })
-    await page.waitForTimeout(3000)
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForTimeout(5000)
 
-    // Scroll para carregar mais
+    // Scroll para carregar mais anúncios
     for (let i = 0; i < 5; i++) {
       await page.evaluate(() => window.scrollBy(0, 2000))
       await page.waitForTimeout(1500)
     }
 
-    const ads = await page.evaluate(() => {
-      const results = []
-      const cards = document.querySelectorAll('[data-testid="ad-archive-render-ad-card"], [class*="x1qjc9v5"]')
+    await page.waitForTimeout(2000)
 
-      cards.forEach((card, index) => {
-        try {
-          const pageNameEl = card.querySelector('a strong, [class*="x193iq5w"]')
-          const pageName = pageNameEl?.textContent?.trim() || ''
-
-          const pageLink = card.querySelector('a[href*="facebook.com"]')
-          const pageUrl = pageLink?.href || ''
-
-          const adTextEl = card.querySelector('[data-ad-preview="message"], [class*="xdj266r"]')
-          const adText = adTextEl?.textContent?.trim() || ''
-
-          const dateEls = card.querySelectorAll('[class*="x1lliihq"]')
-          let dateText = ''
-          dateEls.forEach(el => {
-            const t = el.textContent?.trim() || ''
-            if (t.includes('dia') || t.includes('semana') || t.includes('mês') || t.includes('Started')) {
-              dateText = t
-            }
-          })
-
-          const imgEl = card.querySelector('img[src*="fbcdn"], img[src*="facebook"]')
-          const thumbnail = imgEl?.src || ''
-
-          const ctaLinks = card.querySelectorAll('a[href]')
-          let landingUrl = ''
-          ctaLinks.forEach(link => {
-            const href = link.href || ''
-            if (href && !href.includes('facebook.com') && !href.includes('instagram.com')) {
-              landingUrl = href
-            }
-          })
-
-          if (pageName) {
-            results.push({ pageName, pageUrl, adText, dateText, thumbnail, landingUrl, index })
-          }
-        } catch (e) {}
-      })
-
-      return results
-    })
+    const { results: ads, totalCards } = await extractAdsFromPage(page)
+    console.log(`[buscar] query="${q}" cards=${totalCards} ads_with_name=${ads.length}`)
 
     // Agrupa por anunciante
     const map = {}
@@ -118,9 +181,10 @@ app.get('/buscar', async (req, res) => {
     })
 
     const profiles = Object.values(map).sort((a, b) => b.oldest_ad_days - a.oldest_ad_days).slice(0, 30)
-    res.json({ profiles })
+    res.json({ profiles, debug: { totalCards, adsFound: ads.length } })
 
   } catch (err) {
+    console.error('[buscar] erro:', err.message)
     res.status(500).json({ error: err.message })
   } finally {
     if (browser) await browser.close()
@@ -138,46 +202,34 @@ app.get('/buscar-url', async (req, res) => {
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       locale: 'pt-BR',
+      viewport: { width: 1280, height: 800 },
     })
     const page = await context.newPage()
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 })
-    await page.waitForTimeout(3000)
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForTimeout(5000)
 
-    const data = await page.evaluate(() => {
-      const pageName = document.querySelector('a strong')?.textContent?.trim() || ''
-      const pageUrl = document.querySelector('a[href*="facebook.com/"]')?.href || ''
-      const adText = document.querySelector('[data-ad-preview="message"]')?.textContent?.trim() || ''
-      const imgEl = document.querySelector('img[src*="fbcdn"]')
-      const thumbnail = imgEl?.src || ''
-      const ctaLinks = document.querySelectorAll('a[href]')
-      let landingUrl = ''
-      ctaLinks.forEach(link => {
-        if (link.href && !link.href.includes('facebook.com') && !link.href.includes('instagram.com')) {
-          landingUrl = link.href
-        }
-      })
-      const cards = document.querySelectorAll('[data-testid="ad-archive-render-ad-card"]')
-      return { pageName, pageUrl, adText, thumbnail, landingUrl, totalAds: cards.length }
-    })
+    const { results: ads } = await extractAdsFromPage(page)
 
+    const first = ads[0] || {}
     res.json({
       ad: {
         id: `ad_${Date.now()}`,
-        page_name: data.pageName,
-        page_url: data.pageUrl,
+        page_name: first.pageName || '',
+        page_url: first.pageUrl || '',
         library_url: url,
-        ad_text: data.adText,
-        days_active: 0,
-        thumbnail_url: data.thumbnail,
-        landing_page_url: data.landingUrl,
+        ad_text: first.adText || '',
+        days_active: parseDays(first.dateText),
+        thumbnail_url: first.thumbnail || '',
+        landing_page_url: first.landingUrl || '',
       },
       advertiser: {
-        page_name: data.pageName,
-        page_url: data.pageUrl,
-        total_ads: data.totalAds,
+        page_name: first.pageName || '',
+        page_url: first.pageUrl || '',
+        total_ads: ads.length,
       }
     })
   } catch (err) {
+    console.error('[buscar-url] erro:', err.message)
     res.status(500).json({ error: err.message })
   } finally {
     if (browser) await browser.close()
@@ -246,12 +298,12 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }))
 
 function parseDays(text) {
   if (!text) return 0
-  const match = text.match(/(\d+)\s*(dia|day|semana|week|mês|month)/i)
+  const match = text.match(/(\d+)\s*(dia|day|semana|week|m[eê]s|month)/i)
   if (!match) return 0
   const num = parseInt(match[1])
   const unit = match[2].toLowerCase()
   if (unit.includes('semana') || unit.includes('week')) return num * 7
-  if (unit.includes('mês') || unit.includes('month')) return num * 30
+  if (unit.includes('m') ) return num * 30
   return num
 }
 
