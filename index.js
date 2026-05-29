@@ -201,46 +201,48 @@ app.get('/buscar', async (req, res) => {
 
     console.log(`[buscar] "${q}" → DOM found: ${rawAds.length} ads, pageIdMap: ${Object.keys(pageIdMap).length}`)
 
-    // Filtra e agrupa por anunciante
-    const map = {}
-    rawAds.forEach((ad, i) => {
-      if (shouldExclude(ad.pageName, ad.adText, ad.landingUrl)) return
-      const key = ad.pageName
-      const pageInfo = pageIdMap[key] || { id: `page_${i}`, count: 1 }
-      const days = parseDays(ad.dateText)
-      const adObj = {
-        id: `ad_${Date.now()}_${i}`,
-        page_name: ad.pageName,
-        page_url: `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${pageInfo.id}`,
-        library_url: searchUrl,
-        ad_text: ad.adText,
-        days_active: days,
-        started_date: ad.dateText,
-        thumbnail_url: ad.thumbnail,
-        landing_page_url: ad.landingUrl,
-      }
-      if (!map[key]) {
-        map[key] = {
-          page_id: pageInfo.id,
-          page_name: ad.pageName,
-          page_url: adObj.page_url,
-          library_url: searchUrl,
-          total_ads: pageInfo.count,
-          oldest_ad_days: days,
-          top_ad: adObj,
-          ads: [],
-        }
-      }
-      map[key].ads.push(adObj)
-      if (days > map[key].oldest_ad_days) { map[key].oldest_ad_days = days; map[key].top_ad = adObj }
+    // Índice rápido dos anúncios do DOM por nome de página
+    const domByName = {}
+    rawAds.forEach(ad => {
+      if (!domByName[ad.pageName]) domByName[ad.pageName] = ad
     })
 
-    const profiles = Object.values(map)
-      .sort((a, b) => b.total_ads - a.total_ads)
-      .slice(0, 25)
+    // Monta profiles APENAS dos anunciantes confirmados pela rede do Facebook
+    const profiles = []
+    Object.entries(pageIdMap).forEach(([name, info], i) => {
+      const domAd = domByName[name] || {}
+      if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
-    console.log(`[buscar] após filtro: ${profiles.length} anunciantes`)
-    res.json({ profiles })
+      const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
+      const days = parseDays(domAd.dateText)
+      const adObj = {
+        id: `ad_${Date.now()}_${i}`,
+        page_name: name,
+        page_url: pageUrl,
+        library_url: searchUrl,
+        ad_text: domAd.adText || '',
+        days_active: days,
+        started_date: domAd.dateText || '',
+        thumbnail_url: domAd.thumbnail || '',
+        landing_page_url: domAd.landingUrl || '',
+      }
+      profiles.push({
+        page_id: info.id,
+        page_name: name,
+        page_url: pageUrl,
+        library_url: searchUrl,
+        total_ads: info.count,
+        oldest_ad_days: days,
+        top_ad: adObj,
+        ads: [adObj],
+      })
+    })
+
+    profiles.sort((a, b) => b.total_ads - a.total_ads)
+    const final = profiles.slice(0, 25)
+
+    console.log(`[buscar] pageIdMap=${Object.keys(pageIdMap).length} dom=${rawAds.length} final=${final.length}`)
+    res.json({ profiles: final })
 
   } catch (err) {
     console.error('[buscar] erro:', err.message)
