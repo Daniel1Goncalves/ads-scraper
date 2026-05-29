@@ -195,10 +195,20 @@ app.get('/buscar', async (req, res) => {
 
     const url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&q=${encodeURIComponent(q)}&search_type=keyword_unordered`
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForTimeout(5000)
+    await page.waitForTimeout(3000)
 
     await dismissCookieBanner(page)
-    await page.waitForTimeout(3000)
+
+    // Aguarda os anúncios aparecerem no DOM (até 20s)
+    try {
+      await page.waitForFunction(() => {
+        const spans = Array.from(document.querySelectorAll('span'))
+        return spans.some(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
+      }, { timeout: 20000 })
+      console.log('[buscar] anúncios detectados no DOM')
+    } catch {
+      console.log('[buscar] timeout aguardando anúncios — tentando mesmo assim')
+    }
 
     await scrollAndWait(page, 8)
 
