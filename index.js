@@ -58,8 +58,8 @@ async function getAdvertiserList(browser, keyword) {
       const pages = json?.data?.ad_library_main?.dynamic_filter_options?.pages
       if (pages && Array.isArray(pages)) {
         pages.forEach(p => {
-          if (p.display_name && p.key && p.count >= 2) {
-            advertisers.push({ name: p.display_name, pageId: p.key, count: p.count })
+          if (p.display_name && p.key) {
+            advertisers.push({ name: p.display_name, pageId: p.key, count: p.count || 1 })
           }
         })
       }
@@ -165,13 +165,18 @@ function shouldExclude(name, adText, landingUrl) {
 
   // WhatsApp
   if (url.includes('api.whatsapp') || url.includes('wa.me') || url.includes('whatsapp.com/send')) return true
-  if (text.includes('whatsapp') && text.includes('compra')) return true
+  if (text.includes('whatsapp') && (text.includes('compra') || text.includes('pedido') || text.includes('encomenda'))) return true
+
+  // Apostas / jogos de azar
+  const gamblingKeywords = ['aposta', 'apostas', 'cassino', 'casino', ' bet', 'bet ', '.bet', 'jogue agora', 'ganhe jogando', 'loteria', 'sorteio', 'slots', 'roleta', 'poker', 'bônus de boas-vindas', 'bonus de boas-vindas', 'depósito mínimo', 'deposito minimo', 'odds', 'esportiva', 'esportivo', 'palpite']
+  if (gamblingKeywords.some(k => text.includes(k))) return true
+  if (url.includes('bet') || url.includes('casino') || url.includes('cassino') || url.includes('aposta')) return true
 
   // Loja / produto físico
-  const storeKeywords = ['loja ', ' loja', 'store', 'mercado', 'boutique', 'feira', 'empório', 'atacado', 'varejo', 'entrega']
+  const storeKeywords = ['loja ', ' loja', 'store', 'mercado', 'boutique', 'feira', 'empório', 'atacado', 'varejo']
   if (storeKeywords.some(k => text.includes(k))) return true
 
-  const physicalKeywords = ['frete grátis', 'frete gratis', 'envio grátis', 'envio gratis', 'compre agora e receba', 'produto físico', 'produto fisico', 'entrega em', 'correios', 'sedex']
+  const physicalKeywords = ['frete grátis', 'frete gratis', 'envio grátis', 'envio gratis', 'produto físico', 'produto fisico', 'entrega em', 'correios', 'sedex', 'compre e receba']
   if (physicalKeywords.some(k => text.includes(k))) return true
 
   return false
