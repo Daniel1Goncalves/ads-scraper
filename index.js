@@ -27,7 +27,7 @@ async function dismissCookies(page) {
   for (const sel of selectors) {
     try {
       const btn = page.locator(sel).first()
-      if (await btn.isVisible({ timeout: 1500 })) {
+      if (await btn.isVisible({ timeout: 2000 })) {
         await btn.click()
         await page.waitForTimeout(1500)
         return
@@ -36,153 +36,30 @@ async function dismissCookies(page) {
   }
 }
 
-// Busca lista de anunciantes via GraphQL
-async function getAdvertiserList(browser, keyword) {
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    locale: 'pt-BR',
-    viewport: { width: 1280, height: 900 },
-  })
-  const page = await context.newPage()
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false })
-  })
-
-  const advertisers = []
-
-  page.on('response', async (response) => {
-    if (!response.url().includes('/api/graphql')) return
-    try {
-      const text = await response.text()
-      const json = JSON.parse(text.startsWith('for (;;);') ? text.slice(9) : text)
-      const pages = json?.data?.ad_library_main?.dynamic_filter_options?.pages
-      if (pages && Array.isArray(pages)) {
-        pages.forEach(p => {
-          if (p.display_name && p.key) {
-            advertisers.push({ name: p.display_name, pageId: p.key, count: p.count || 1 })
-          }
-        })
-      }
-    } catch {}
-  })
-
-  const url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&q=${encodeURIComponent(keyword)}&search_type=keyword_unordered`
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-  await page.waitForTimeout(5000)
-  await dismissCookies(page)
-  await page.waitForTimeout(4000)
-
-  await context.close()
-  return { advertisers, searchUrl: url }
-}
-
-// Visita a página de um anunciante e extrai o primeiro anúncio
-async function getFirstAd(browser, pageId) {
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    locale: 'pt-BR',
-    viewport: { width: 1280, height: 900 },
-  })
-  const page = await context.newPage()
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false })
-  })
-
-  try {
-    const url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${pageId}`
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 })
-    await page.waitForTimeout(3000)
-    await dismissCookies(page)
-
-    // Espera aparecer algum anúncio
-    try {
-      await page.waitForFunction(() => {
-        const spans = Array.from(document.querySelectorAll('span'))
-        return spans.some(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
-      }, { timeout: 10000 })
-    } catch {}
-
-    const result = await page.evaluate(() => {
-      let adText = ''
-      let landingUrl = ''
-      let thumbnail = ''
-
-      const spans = Array.from(document.querySelectorAll('span'))
-      const sponsoredEl = spans.find(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
-
-      if (sponsoredEl) {
-        // Sobe para achar o card
-        let card = sponsoredEl
-        for (let i = 0; i < 12; i++) {
-          card = card.parentElement
-          if (!card) break
-          const rect = card.getBoundingClientRect()
-          if (rect.height > 200 && rect.width > 200) break
-        }
-
-        if (card) {
-          // Texto do anúncio
-          Array.from(card.querySelectorAll('div, span, p')).forEach(el => {
-            if (el.children.length > 3) return
-            const t = el.textContent.trim()
-            if (t.length > 60 && t.length < 2000) {
-              if (t.length > adText.length) adText = t.slice(0, 800)
-            }
-          })
-
-          // Landing page
-          Array.from(card.querySelectorAll('a[href]')).forEach(link => {
-            const href = link.href
-            if (href && !href.includes('facebook.com') && !href.includes('instagram.com') && href.startsWith('http')) {
-              landingUrl = href
-            }
-          })
-
-          // Thumbnail
-          let maxArea = 0
-          Array.from(card.querySelectorAll('img')).forEach(img => {
-            if (!img.src?.startsWith('http')) return
-            const area = (img.naturalWidth || img.width || 1) * (img.naturalHeight || img.height || 1)
-            if (area > maxArea) { maxArea = area; thumbnail = img.src }
-          })
-        }
-      }
-
-      return { adText, landingUrl, thumbnail }
-    })
-
-    return result
-  } catch {
-    return { adText: '', landingUrl: '', thumbnail: '' }
-  } finally {
-    await context.close()
-  }
-}
-
 function shouldExclude(name, adText, landingUrl) {
   const text = (name + ' ' + adText).toLowerCase()
-  const url = landingUrl.toLowerCase()
+  const url = (landingUrl || '').toLowerCase()
 
   // WhatsApp
   if (url.includes('api.whatsapp') || url.includes('wa.me') || url.includes('whatsapp.com/send')) return true
   if (text.includes('whatsapp') && (text.includes('compra') || text.includes('pedido') || text.includes('encomenda'))) return true
 
   // Apostas / jogos de azar
-  const gamblingKeywords = ['aposta', 'apostas', 'cassino', 'casino', ' bet', 'bet ', '.bet', 'jogue agora', 'ganhe jogando', 'loteria', 'sorteio', 'slots', 'roleta', 'poker', 'bônus de boas-vindas', 'bonus de boas-vindas', 'depósito mínimo', 'deposito minimo', 'odds', 'esportiva', 'esportivo', 'palpite']
-  if (gamblingKeywords.some(k => text.includes(k))) return true
-  if (url.includes('bet') || url.includes('casino') || url.includes('cassino') || url.includes('aposta')) return true
+  const gambling = ['aposta', 'apostas', 'cassino', 'casino', ' bet', 'bet.', 'betano', 'betnacional', 'jogue agora', 'ganhe jogando', 'loteria', 'slots', 'roleta', 'poker', 'odds', 'depósito mínimo', 'deposito minimo', 'palpite', 'esportiva']
+  if (gambling.some(k => text.includes(k))) return true
+  if (url.includes('bet') || url.includes('casino') || url.includes('cassino') || url.includes('1mmm')) return true
 
   // Loja / produto físico
-  const storeKeywords = ['loja ', ' loja', 'store', 'mercado', 'boutique', 'feira', 'empório', 'atacado', 'varejo']
-  if (storeKeywords.some(k => text.includes(k))) return true
+  const store = ['loja ', ' loja', 'boutique', 'feira ', 'atacado', 'varejo']
+  if (store.some(k => text.includes(k))) return true
 
-  const physicalKeywords = ['frete grátis', 'frete gratis', 'envio grátis', 'envio gratis', 'produto físico', 'produto fisico', 'entrega em', 'correios', 'sedex', 'compre e receba']
-  if (physicalKeywords.some(k => text.includes(k))) return true
+  const physical = ['frete grátis', 'frete gratis', 'envio grátis', 'envio gratis', 'produto físico', 'entrega em', 'correios', 'sedex', 'compre e receba']
+  if (physical.some(k => text.includes(k))) return true
 
   return false
 }
 
-// Busca por keyword
+// Busca anúncios na página de resultados (uma só visita)
 app.get('/buscar', async (req, res) => {
   const { q } = req.query
   if (!q) return res.status(400).json({ error: 'Keyword obrigatória' })
@@ -190,59 +67,179 @@ app.get('/buscar', async (req, res) => {
   let browser
   try {
     browser = await getBrowser()
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      locale: 'pt-BR',
+      viewport: { width: 1280, height: 900 },
+    })
+    const page = await context.newPage()
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false })
+    })
 
-    // 1. Pega lista de anunciantes
-    const { advertisers, searchUrl } = await getAdvertiserList(browser, q)
-    console.log(`[buscar] "${q}" → ${advertisers.length} anunciantes (total_ads >= 2)`)
+    // Captura page_id dos anunciantes via rede
+    const pageIdMap = {}
+    page.on('response', async (response) => {
+      if (!response.url().includes('/api/graphql')) return
+      try {
+        const text = await response.text()
+        const json = JSON.parse(text.startsWith('for (;;);') ? text.slice(9) : text)
+        const pages = json?.data?.ad_library_main?.dynamic_filter_options?.pages
+        if (pages) {
+          pages.forEach(p => { if (p.key && p.display_name) pageIdMap[p.display_name] = { id: p.key, count: p.count || 1 } })
+        }
+      } catch {}
+    })
 
-    if (advertisers.length === 0) {
-      return res.json({ profiles: [] })
+    const searchUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&q=${encodeURIComponent(q)}&search_type=keyword_unordered`
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForTimeout(4000)
+    await dismissCookies(page)
+
+    // Aguarda anúncios aparecerem no DOM
+    let domLoaded = false
+    try {
+      await page.waitForFunction(() => {
+        const spans = Array.from(document.querySelectorAll('span'))
+        return spans.some(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
+      }, { timeout: 20000 })
+      domLoaded = true
+      console.log('[buscar] DOM carregado com anúncios')
+    } catch {
+      console.log('[buscar] timeout DOM — tentando assim mesmo')
     }
 
-    // 2. Visita cada anunciante em paralelo (5 por vez) para pegar texto e URL
-    const BATCH = 5
-    const enriched = []
-
-    for (let i = 0; i < advertisers.length; i += BATCH) {
-      const batch = advertisers.slice(i, i + BATCH)
-      const results = await Promise.all(
-        batch.map(async (adv) => {
-          const { adText, landingUrl, thumbnail } = await getFirstAd(browser, adv.pageId)
-          return { ...adv, adText, landingUrl, thumbnail }
-        })
-      )
-      enriched.push(...results)
+    // Scroll para carregar mais
+    for (let i = 0; i < 5; i++) {
+      await page.evaluate(() => window.scrollBy(0, 2500))
+      await page.waitForTimeout(1500)
     }
+    await page.waitForTimeout(2000)
 
-    // 3. Filtra WhatsApp e lojas
-    const filtered = enriched.filter(a => !shouldExclude(a.name, a.adText, a.landingUrl))
-    console.log(`[buscar] após filtro: ${filtered.length} anunciantes`)
+    // Extrai todos os anúncios do DOM
+    const rawAds = await page.evaluate(() => {
+      const results = []
+      const seen = new Set()
 
-    // 4. Monta profiles
-    const profiles = filtered.map((a, i) => {
+      const spans = Array.from(document.querySelectorAll('span'))
+      const sponsoredEls = spans.filter(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
+
+      sponsoredEls.forEach(sponsoredEl => {
+        try {
+          // Sobe para achar o card
+          let card = sponsoredEl
+          for (let i = 0; i < 15; i++) {
+            card = card.parentElement
+            if (!card) break
+            const rect = card.getBoundingClientRect()
+            if (rect.height > 150 && rect.width > 250) break
+          }
+          if (!card || seen.has(card)) return
+          seen.add(card)
+
+          // Nome da página (elemento antes do "Patrocinado")
+          let pageName = ''
+          let el = sponsoredEl
+          for (let i = 0; i < 6; i++) {
+            el = el.parentElement
+            if (!el) break
+            const prev = el.previousElementSibling
+            if (prev) {
+              const t = prev.textContent.trim()
+              if (t.length > 1 && t.length < 100 && t !== 'Patrocinado' && t !== 'Sponsored') {
+                pageName = t; break
+              }
+            }
+          }
+          if (!pageName) {
+            for (const a of card.querySelectorAll('a[href*="facebook.com"]')) {
+              const t = a.textContent.trim()
+              if (t.length > 1 && t.length < 100) { pageName = t; break }
+            }
+          }
+
+          // Texto do anúncio
+          let adText = ''
+          card.querySelectorAll('div, span, p').forEach(el => {
+            if (el.children.length > 3) return
+            const t = el.textContent.trim()
+            if (t.length > 80 && t.length < 2000 && t !== pageName && t !== 'Patrocinado') {
+              if (t.length > adText.length) adText = t.slice(0, 600)
+            }
+          })
+
+          // Landing page URL
+          let landingUrl = ''
+          card.querySelectorAll('a[href]').forEach(a => {
+            const h = a.href
+            if (h && !h.includes('facebook.com') && !h.includes('instagram.com') && h.startsWith('http')) {
+              landingUrl = h
+            }
+          })
+
+          // Thumbnail
+          let thumbnail = '', maxArea = 0
+          card.querySelectorAll('img').forEach(img => {
+            if (!img.src?.startsWith('http')) return
+            const area = (img.naturalWidth || img.width || 1) * (img.naturalHeight || img.height || 1)
+            if (area > maxArea) { maxArea = area; thumbnail = img.src }
+          })
+
+          // Data
+          let dateText = ''
+          card.querySelectorAll('span, div').forEach(el => {
+            const t = el.textContent.trim()
+            if (t.match(/\d+\s*de\s+\w+\s+de\s+\d{4}/) && t.length < 80) dateText = t
+          })
+
+          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText })
+        } catch {}
+      })
+
+      return results
+    })
+
+    console.log(`[buscar] "${q}" → DOM found: ${rawAds.length} ads, pageIdMap: ${Object.keys(pageIdMap).length}`)
+
+    // Filtra e agrupa por anunciante
+    const map = {}
+    rawAds.forEach((ad, i) => {
+      if (shouldExclude(ad.pageName, ad.adText, ad.landingUrl)) return
+      const key = ad.pageName
+      const pageInfo = pageIdMap[key] || { id: `page_${i}`, count: 1 }
+      const days = parseDays(ad.dateText)
       const adObj = {
         id: `ad_${Date.now()}_${i}`,
-        page_name: a.name,
-        page_url: `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${a.pageId}`,
+        page_name: ad.pageName,
+        page_url: `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${pageInfo.id}`,
         library_url: searchUrl,
-        ad_text: a.adText,
-        days_active: 0,
-        started_date: '',
-        thumbnail_url: a.thumbnail,
-        landing_page_url: a.landingUrl,
+        ad_text: ad.adText,
+        days_active: days,
+        started_date: ad.dateText,
+        thumbnail_url: ad.thumbnail,
+        landing_page_url: ad.landingUrl,
       }
-      return {
-        page_id: a.pageId,
-        page_name: a.name,
-        page_url: adObj.page_url,
-        library_url: searchUrl,
-        total_ads: a.count,
-        oldest_ad_days: 0,
-        top_ad: adObj,
-        ads: [adObj],
+      if (!map[key]) {
+        map[key] = {
+          page_id: pageInfo.id,
+          page_name: ad.pageName,
+          page_url: adObj.page_url,
+          library_url: searchUrl,
+          total_ads: pageInfo.count,
+          oldest_ad_days: days,
+          top_ad: adObj,
+          ads: [],
+        }
       }
-    }).sort((a, b) => b.total_ads - a.total_ads).slice(0, 20)
+      map[key].ads.push(adObj)
+      if (days > map[key].oldest_ad_days) { map[key].oldest_ad_days = days; map[key].top_ad = adObj }
+    })
 
+    const profiles = Object.values(map)
+      .sort((a, b) => b.total_ads - a.total_ads)
+      .slice(0, 25)
+
+    console.log(`[buscar] após filtro: ${profiles.length} anunciantes`)
     res.json({ profiles })
 
   } catch (err) {
@@ -253,7 +250,7 @@ app.get('/buscar', async (req, res) => {
   }
 })
 
-// Busca por URL
+// Busca por URL da biblioteca
 app.get('/buscar-url', async (req, res) => {
   const { url } = req.query
   if (!url) return res.status(400).json({ error: 'URL obrigatória' })
@@ -269,55 +266,52 @@ app.get('/buscar-url', async (req, res) => {
     const page = await context.newPage()
     await page.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => false }) })
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForTimeout(5000)
+    await page.waitForTimeout(4000)
     await dismissCookies(page)
     try {
       await page.waitForFunction(() => {
-        const spans = Array.from(document.querySelectorAll('span'))
-        return spans.some(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
-      }, { timeout: 10000 })
+        return Array.from(document.querySelectorAll('span')).some(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
+      }, { timeout: 12000 })
     } catch {}
 
     const data = await page.evaluate(() => {
-      const spans = Array.from(document.querySelectorAll('span'))
-      const sponsoredEl = spans.find(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
-      if (!sponsoredEl) return { pageName: '', pageUrl: '', adText: '', thumbnail: '', landingUrl: '' }
-
+      const sponsoredEl = Array.from(document.querySelectorAll('span')).find(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
+      if (!sponsoredEl) return {}
       let card = sponsoredEl
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 15; i++) {
         card = card.parentElement
         if (!card) break
         const rect = card.getBoundingClientRect()
-        if (rect.height > 200 && rect.width > 200) break
+        if (rect.height > 150 && rect.width > 250) break
       }
-
+      if (!card) return {}
       let pageName = '', pageUrl = '', adText = '', thumbnail = '', landingUrl = ''
-      if (card) {
-        const links = Array.from(card.querySelectorAll('a[href*="facebook.com"]'))
-        for (const l of links) { const t = l.textContent.trim(); if (t.length > 1 && t.length < 100) { pageName = t; pageUrl = l.href; break } }
-        Array.from(card.querySelectorAll('div,span,p')).forEach(el => {
-          if (el.children.length > 3) return
-          const t = el.textContent.trim()
-          if (t.length > 60 && t.length < 2000 && t.length > adText.length) adText = t.slice(0, 800)
-        })
-        let maxArea = 0
-        Array.from(card.querySelectorAll('img')).forEach(img => {
-          if (!img.src?.startsWith('http')) return
-          const a = (img.naturalWidth || img.width || 1) * (img.naturalHeight || img.height || 1)
-          if (a > maxArea) { maxArea = a; thumbnail = img.src }
-        })
-        Array.from(card.querySelectorAll('a[href]')).forEach(l => {
-          const h = l.href
-          if (h && !h.includes('facebook.com') && !h.includes('instagram.com') && h.startsWith('http')) landingUrl = h
-        })
+      for (const a of card.querySelectorAll('a[href*="facebook.com"]')) {
+        const t = a.textContent.trim()
+        if (t.length > 1 && t.length < 100) { pageName = t; pageUrl = a.href; break }
       }
+      card.querySelectorAll('div,span,p').forEach(el => {
+        if (el.children.length > 3) return
+        const t = el.textContent.trim()
+        if (t.length > 80 && t.length < 2000 && t.length > adText.length) adText = t.slice(0, 600)
+      })
+      let maxArea = 0
+      card.querySelectorAll('img').forEach(img => {
+        if (!img.src?.startsWith('http')) return
+        const a = (img.naturalWidth || img.width || 1) * (img.naturalHeight || img.height || 1)
+        if (a > maxArea) { maxArea = a; thumbnail = img.src }
+      })
+      card.querySelectorAll('a[href]').forEach(a => {
+        const h = a.href
+        if (h && !h.includes('facebook.com') && !h.includes('instagram.com') && h.startsWith('http')) landingUrl = h
+      })
       return { pageName, pageUrl, adText, thumbnail, landingUrl }
     })
 
     await context.close()
     res.json({
-      ad: { id: `ad_${Date.now()}`, page_name: data.pageName, page_url: data.pageUrl, library_url: url, ad_text: data.adText, days_active: 0, thumbnail_url: data.thumbnail, landing_page_url: data.landingUrl },
-      advertiser: { page_name: data.pageName, page_url: data.pageUrl, total_ads: 1 }
+      ad: { id: `ad_${Date.now()}`, page_name: data.pageName || '', page_url: data.pageUrl || '', library_url: url, ad_text: data.adText || '', days_active: 0, thumbnail_url: data.thumbnail || '', landing_page_url: data.landingUrl || '' },
+      advertiser: { page_name: data.pageName || '', page_url: data.pageUrl || '', total_ads: 1 }
     })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -330,13 +324,10 @@ app.get('/buscar-url', async (req, res) => {
 app.post('/scrape', async (req, res) => {
   const { url } = req.body
   if (!url) return res.status(400).json({ error: 'URL obrigatória' })
-
   let browser
   try {
     browser = await getBrowser()
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    })
+    const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' })
     const page = await context.newPage()
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 })
     await page.waitForTimeout(2000)
