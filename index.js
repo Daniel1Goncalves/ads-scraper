@@ -221,6 +221,57 @@ function groupAds(ads, libraryUrl) {
   return Object.values(map).sort((a, b) => b.oldest_ad_days - a.oldest_ad_days).slice(0, 30)
 }
 
+// Debug: inspeciona estrutura das respostas de rede
+app.get('/debug-network', async (req, res) => {
+  const { q } = req.query
+  const keyword = q || 'pdf'
+  let browser
+  try {
+    browser = await getBrowser()
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      locale: 'pt-BR',
+      viewport: { width: 1280, height: 900 },
+    })
+    const page = await context.newPage()
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false })
+    })
+
+    const captured = []
+    page.on('response', async (response) => {
+      const url = response.url()
+      if (!url.includes('facebook.com')) return
+      const isGraphQL = url.includes('/api/graphql') || url.includes('graphql?')
+      const isAdAPI = url.includes('ads/library') || url.includes('search_ads')
+      if (!isGraphQL && !isAdAPI) return
+      try {
+        const text = await response.text()
+        const jsonStr = text.startsWith('for (;;);') ? text.slice(9) : text
+        if (!jsonStr.trim().startsWith('{') && !jsonStr.trim().startsWith('[')) return
+        const json = JSON.parse(jsonStr)
+        // Pega só os primeiros 2000 chars para não explodir
+        captured.push({ url: url.slice(0, 100), preview: JSON.stringify(json).slice(0, 2000) })
+      } catch {}
+    })
+
+    const url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&q=${encodeURIComponent(keyword)}&search_type=keyword_unordered`
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForTimeout(5000)
+    for (let i = 0; i < 3; i++) {
+      await page.evaluate(() => window.scrollBy(0, 2500))
+      await page.waitForTimeout(2000)
+    }
+    await page.waitForTimeout(2000)
+
+    res.json({ total: captured.length, responses: captured })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  } finally {
+    if (browser) await browser.close()
+  }
+})
+
 // Busca por keyword
 app.get('/buscar', async (req, res) => {
   const { q } = req.query
