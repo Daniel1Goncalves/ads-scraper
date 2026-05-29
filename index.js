@@ -40,8 +40,9 @@ function shouldExclude(name, adText, landingUrl) {
   const text = (name + ' ' + adText).toLowerCase()
   const url = (landingUrl || '').toLowerCase()
 
-  // WhatsApp
+  // WhatsApp e redes sociais como landing page (não têm LP própria)
   if (url.includes('api.whatsapp') || url.includes('wa.me') || url.includes('whatsapp.com/send')) return true
+  if (url.includes('instagram.com') || url.includes('facebook.com') || url.includes('t.me/')) return true
   if (text.includes('whatsapp') && (text.includes('compra') || text.includes('pedido') || text.includes('encomenda'))) return true
 
   // Apostas / jogos de azar
