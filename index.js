@@ -11,6 +11,33 @@ async function getBrowser() {
   })
 }
 
+async function dismissCookieBanner(page) {
+  try {
+    // Tenta clicar em "Allow all cookies" / "Aceitar todos" / "Allow essential and optional cookies"
+    const selectors = [
+      'button[data-cookiebanner="accept_button"]',
+      'button[data-testid="cookie-policy-manage-dialog-accept-button"]',
+      '[data-testid="cookie-policy-manage-dialog-accept-button"]',
+      'button:has-text("Allow all cookies")',
+      'button:has-text("Aceitar todos os cookies")',
+      'button:has-text("Accept All")',
+      'button:has-text("Allow essential and optional cookies")',
+      '[aria-label="Allow all cookies"]',
+    ]
+    for (const sel of selectors) {
+      try {
+        const btn = page.locator(sel).first()
+        if (await btn.isVisible({ timeout: 2000 })) {
+          await btn.click()
+          await page.waitForTimeout(2000)
+          console.log(`[cookie] clicou: ${sel}`)
+          return
+        }
+      } catch {}
+    }
+  } catch {}
+}
+
 async function scrollAndWait(page, times = 8) {
   for (let i = 0; i < times; i++) {
     await page.evaluate(() => window.scrollBy(0, 2500))
@@ -23,10 +50,9 @@ async function extractAdsFromPage(page) {
   return page.evaluate(() => {
     const results = []
 
-    // Ancora: elementos que contêm "Patrocinado" ou "Sponsored"
-    // Cada um desses é um card de anúncio
-    const allSpans = Array.from(document.querySelectorAll('span, a'))
-    const sponsoredEls = allSpans.filter(el => {
+    // Âncora: "Patrocinado" ou "Sponsored"
+    const allEls = Array.from(document.querySelectorAll('span, a'))
+    const sponsoredEls = allEls.filter(el => {
       const t = el.textContent.trim()
       return (t === 'Patrocinado' || t === 'Sponsored') && el.children.length === 0
     })
@@ -35,48 +61,39 @@ async function extractAdsFromPage(page) {
 
     sponsoredEls.forEach(sponsoredEl => {
       try {
-        // Sobe na árvore DOM para achar o card pai
+        // Sobe até achar o card pai com tamanho adequado
         let card = sponsoredEl
-        for (let i = 0; i < 10; i++) {
+        for (let i = 0; i < 12; i++) {
           card = card.parentElement
           if (!card) break
           const rect = card.getBoundingClientRect()
-          // Card deve ter tamanho razoável
           if (rect.height > 200 && rect.width > 300) break
         }
         if (!card) return
-
-        // Evita duplicatas
         if (seen.has(card)) return
         seen.add(card)
 
-        // Nome da página — irmão/pai do "Patrocinado"
-        // Geralmente está na mesma linha ou logo acima
+        // Nome da página — elemento anterior ao "Patrocinado"
         let pageName = ''
         let searchEl = sponsoredEl
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 6; i++) {
           searchEl = searchEl.parentElement
           if (!searchEl) break
-          // Pega o elemento anterior
           const prev = searchEl.previousElementSibling
           if (prev) {
             const text = prev.textContent.trim()
-            if (text.length > 1 && text.length < 100 && !text.includes('Patrocinado')) {
+            if (text.length > 1 && text.length < 100 && !text.includes('Patrocinado') && !text.includes('Sponsored')) {
               pageName = text
               break
             }
           }
         }
 
-        // Fallback: link mais próximo ao "Patrocinado"
+        // Fallback: primeiro link com texto legível
         if (!pageName) {
-          const nearLinks = Array.from(card.querySelectorAll('a[href*="facebook.com"]'))
-          for (const link of nearLinks) {
+          for (const link of Array.from(card.querySelectorAll('a[href*="facebook.com"]'))) {
             const text = link.textContent.trim()
-            if (text.length > 1 && text.length < 100) {
-              pageName = text
-              break
-            }
+            if (text.length > 1 && text.length < 100) { pageName = text; break }
           }
         }
 
@@ -85,26 +102,23 @@ async function extractAdsFromPage(page) {
         const pageLink = card.querySelector('a[href*="facebook.com/"]')
         if (pageLink) pageUrl = pageLink.href
 
-        // Texto do anúncio — bloco de texto mais longo no card
+        // Texto do anúncio
         let adText = ''
         Array.from(card.querySelectorAll('div, span, p')).forEach(el => {
           if (el.children.length > 3) return
           const t = el.textContent.trim()
-          if (t.length > 60 && t.length < 2000 && t !== pageName) {
+          if (t.length > 60 && t.length < 2000 && t !== pageName && !t.includes('Patrocinado')) {
             if (t.length > adText.length) adText = t.slice(0, 600)
           }
         })
 
-        // Thumbnail — maior imagem no card
+        // Thumbnail
         let thumbnail = ''
         let maxArea = 0
         Array.from(card.querySelectorAll('img')).forEach(img => {
           if (!img.src || !img.src.startsWith('http')) return
-          const area = (img.naturalWidth || img.width) * (img.naturalHeight || img.height)
-          if (area > maxArea) {
-            maxArea = area
-            thumbnail = img.src
-          }
+          const area = (img.naturalWidth || img.width || 1) * (img.naturalHeight || img.height || 1)
+          if (area > maxArea) { maxArea = area; thumbnail = img.src }
         })
 
         // Landing page
@@ -116,28 +130,55 @@ async function extractAdsFromPage(page) {
           }
         })
 
-        // Data / dias no ar
+        // Data
         let dateText = ''
         Array.from(card.querySelectorAll('span, div')).forEach(el => {
           const t = el.textContent.trim()
-          if (t.match(/\d+\s*(dia|semana|m[eê]s|week|month|day)/i) && t.length < 60) {
-            dateText = t
-          }
-          // "Veiculação iniciada em XX de xxx de XXXX"
-          if (t.match(/[Vv]eiculação iniciada|[Ss]tarted running/)) {
-            dateText = t
-          }
+          if (t.match(/\d+\s*de\s+\w+\s+de\s+\d{4}/) && t.length < 80) dateText = t
+          else if (t.match(/\d+\s*(dia|semana|m[eê]s|week|month|day)/i) && t.length < 60) dateText = t
         })
 
-        results.push({ pageName, pageUrl, adText, dateText, thumbnail, landingUrl })
-      } catch (e) {}
+        if (pageName) results.push({ pageName, pageUrl, adText, dateText, thumbnail, landingUrl })
+      } catch {}
     })
 
     return { results, totalSponsored: sponsoredEls.length }
   })
 }
 
-// Busca por keyword na biblioteca do Meta
+// Screenshot para debug
+app.get('/screenshot', async (req, res) => {
+  const { url } = req.query
+  const targetUrl = url || 'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&q=pdf&search_type=keyword_unordered'
+  let browser
+  try {
+    browser = await getBrowser()
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      locale: 'pt-BR',
+      viewport: { width: 1280, height: 900 },
+    })
+    const page = await context.newPage()
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForTimeout(4000)
+    await dismissCookieBanner(page)
+    await page.waitForTimeout(3000)
+    const screenshot = await page.screenshot({ fullPage: false })
+    const html = await page.content()
+    const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 3000))
+    res.json({
+      screenshot: screenshot.toString('base64'),
+      bodyText,
+      url: page.url()
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  } finally {
+    if (browser) await browser.close()
+  }
+})
+
+// Busca por keyword
 app.get('/buscar', async (req, res) => {
   const { q } = req.query
   if (!q) return res.status(400).json({ error: 'Keyword obrigatória' })
@@ -154,14 +195,18 @@ app.get('/buscar', async (req, res) => {
 
     const url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&q=${encodeURIComponent(q)}&search_type=keyword_unordered`
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForTimeout(6000)
+    await page.waitForTimeout(5000)
+
+    await dismissCookieBanner(page)
+    await page.waitForTimeout(3000)
 
     await scrollAndWait(page, 8)
 
     const { results: ads, totalSponsored } = await extractAdsFromPage(page)
-    console.log(`[buscar] query="${q}" sponsored_found=${totalSponsored} ads_extracted=${ads.length}`)
+    const bodySnippet = await page.evaluate(() => document.body.innerText.slice(0, 500))
+    console.log(`[buscar] query="${q}" sponsored_found=${totalSponsored} ads=${ads.length}`)
+    console.log(`[buscar] page snippet: ${bodySnippet.replace(/\n/g, ' ').slice(0, 200)}`)
 
-    // Agrupa por anunciante
     const map = {}
     ads.forEach((ad, i) => {
       const key = ad.pageName || `unknown_${i}`
@@ -177,7 +222,6 @@ app.get('/buscar', async (req, res) => {
         thumbnail_url: ad.thumbnail,
         landing_page_url: ad.landingUrl,
       }
-
       if (!map[key]) {
         map[key] = {
           page_id: `page_${i}`,
@@ -209,7 +253,7 @@ app.get('/buscar', async (req, res) => {
   }
 })
 
-// Busca por URL da biblioteca
+// Busca por URL
 app.get('/buscar-url', async (req, res) => {
   const { url } = req.query
   if (!url) return res.status(400).json({ error: 'URL obrigatória' })
@@ -224,7 +268,9 @@ app.get('/buscar-url', async (req, res) => {
     })
     const page = await context.newPage()
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForTimeout(6000)
+    await page.waitForTimeout(5000)
+    await dismissCookieBanner(page)
+    await page.waitForTimeout(2000)
     await scrollAndWait(page, 3)
 
     const { results: ads } = await extractAdsFromPage(page)
@@ -248,7 +294,6 @@ app.get('/buscar-url', async (req, res) => {
       }
     })
   } catch (err) {
-    console.error('[buscar-url] erro:', err.message)
     res.status(500).json({ error: err.message })
   } finally {
     if (browser) await browser.close()
@@ -289,13 +334,7 @@ app.post('/scrape', async (req, res) => {
         const src = el.src
         if (src && src.startsWith('http') && !src.includes('icon') && !src.includes('logo')) images.push(src)
       })
-      return {
-        title,
-        headlines: headlines.slice(0, 10),
-        cta_texts: Array.from(new Set(cta_texts)).slice(0, 5),
-        full_text,
-        images: images.slice(0, 5),
-      }
+      return { title, headlines: headlines.slice(0, 10), cta_texts: Array.from(new Set(cta_texts)).slice(0, 5), full_text, images: images.slice(0, 5) }
     })
 
     res.json({ url, ...data })
@@ -310,7 +349,6 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }))
 
 function parseDays(text) {
   if (!text) return 0
-  // "Veiculação iniciada em 14 de abr de 2026"
   const dateMatch = text.match(/(\d+)\s+de\s+(\w+)\s+de\s+(\d{4})/)
   if (dateMatch) {
     const months = { jan:0, fev:1, mar:2, abr:3, mai:4, jun:5, jul:6, ago:7, set:8, out:9, nov:10, dez:11 }
