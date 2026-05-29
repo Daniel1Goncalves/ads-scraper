@@ -318,8 +318,8 @@ app.get('/buscar', async (req, res) => {
     const ads = await scrapeViaNetwork(page, url)
 
     console.log(`[buscar] query="${q}" ads_total=${ads.length}`)
-    const profiles = groupAds(ads, url)
-    res.json({ profiles, debug: { adsFound: ads.length } })
+    const profiles = groupAds(ads, url).filter(p => p.total_ads >= 2)
+    res.json({ profiles, debug: { adsFound: ads.length, afterFilter: profiles.length } })
 
   } catch (err) {
     console.error('[buscar] erro:', err.message)
