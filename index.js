@@ -90,21 +90,39 @@ async function scrapeViaNetwork(page, targetUrl) {
 function extractAdsFromJSON(obj, results, depth = 0) {
   if (depth > 10 || !obj || typeof obj !== 'object') return
 
-  // Procura por campos típicos de anúncios
-  if (obj.page_name && (obj.ad_creative_bodies || obj.snapshot || obj.ad_id)) {
-    const ad = {
-      pageName: obj.page_name || '',
-      pageUrl: obj.page_profile_uri || obj.page_profile_url || '',
-      adText: (obj.ad_creative_bodies && obj.ad_creative_bodies[0]) || '',
-      thumbnail: (obj.snapshot && obj.snapshot.images && obj.snapshot.images[0] && obj.snapshot.images[0].original_image_url) || '',
-      landingUrl: (obj.snapshot && obj.snapshot.link_url) || '',
-      dateText: obj.ad_delivery_start_time || '',
-    }
-    results.push(ad)
+  // Padrão 1: dynamic_filter_options.pages — lista de anunciantes que correspondem à busca
+  const pages = obj?.data?.ad_library_main?.dynamic_filter_options?.pages
+  if (pages && Array.isArray(pages)) {
+    pages.forEach(page => {
+      if (!page.display_name || !page.key) return
+      results.push({
+        pageName: page.display_name,
+        pageId: page.key,
+        pageUrl: `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${page.key}`,
+        adText: '',
+        thumbnail: '',
+        landingUrl: '',
+        dateText: '',
+        totalAds: page.count || 1,
+      })
+    })
     return
   }
 
-  // Busca recursiva em arrays e objetos
+  // Padrão 2: ad individual com snapshot
+  if (obj.page_name && (obj.ad_creative_bodies || obj.snapshot || obj.ad_id)) {
+    results.push({
+      pageName: obj.page_name || '',
+      pageUrl: obj.page_profile_uri || obj.page_profile_url || '',
+      adText: (obj.ad_creative_bodies && obj.ad_creative_bodies[0]) || '',
+      thumbnail: (obj.snapshot?.images?.[0]?.original_image_url) || '',
+      landingUrl: (obj.snapshot?.link_url) || '',
+      dateText: obj.ad_delivery_start_time || '',
+      totalAds: 1,
+    })
+    return
+  }
+
   if (Array.isArray(obj)) {
     obj.forEach(item => extractAdsFromJSON(item, results, depth + 1))
   } else {
@@ -199,26 +217,30 @@ function groupAds(ads, libraryUrl) {
   const map = {}
   ads.forEach((ad, i) => {
     const key = ad.pageName || `unknown_${i}`
-    const days = parseDays(ad.dateText)
+    if (map[key]) return // já existe, pula duplicata
     const adObj = {
       id: `ad_${Date.now()}_${i}`,
       page_name: ad.pageName,
       page_url: ad.pageUrl,
-      library_url: libraryUrl,
-      ad_text: ad.adText,
-      days_active: days,
-      started_date: ad.dateText,
-      thumbnail_url: ad.thumbnail,
-      landing_page_url: ad.landingUrl,
+      library_url: ad.pageUrl || libraryUrl,
+      ad_text: ad.adText || '',
+      days_active: parseDays(ad.dateText),
+      started_date: ad.dateText || '',
+      thumbnail_url: ad.thumbnail || '',
+      landing_page_url: ad.landingUrl || '',
     }
-    if (!map[key]) {
-      map[key] = { page_id: `page_${i}`, page_name: ad.pageName, page_url: ad.pageUrl, library_url: libraryUrl, total_ads: 0, oldest_ad_days: 0, top_ad: adObj, ads: [] }
+    map[key] = {
+      page_id: ad.pageId || `page_${i}`,
+      page_name: ad.pageName,
+      page_url: ad.pageUrl,
+      library_url: ad.pageUrl || libraryUrl,
+      total_ads: ad.totalAds || 1,
+      oldest_ad_days: parseDays(ad.dateText),
+      top_ad: adObj,
+      ads: [adObj],
     }
-    map[key].total_ads++
-    map[key].ads.push(adObj)
-    if (days > map[key].oldest_ad_days) { map[key].oldest_ad_days = days; map[key].top_ad = adObj }
   })
-  return Object.values(map).sort((a, b) => b.oldest_ad_days - a.oldest_ad_days).slice(0, 30)
+  return Object.values(map).sort((a, b) => b.total_ads - a.total_ads).slice(0, 30)
 }
 
 // Debug: inspeciona estrutura das respostas de rede
