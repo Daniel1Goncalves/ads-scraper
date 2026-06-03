@@ -112,9 +112,9 @@ app.get('/buscar', async (req, res) => {
     }
 
     // Scroll para carregar mais
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 12; i++) {
       await page.evaluate(() => window.scrollBy(0, 2500))
-      await page.waitForTimeout(1500)
+      await page.waitForTimeout(1200)
     }
     await page.waitForTimeout(2000)
 
@@ -248,7 +248,7 @@ app.get('/buscar', async (req, res) => {
     })
 
     profiles.sort((a, b) => b.total_ads - a.total_ads)
-    const final = profiles.slice(0, 25)
+    const final = profiles.slice(0, 50)
 
     console.log(`[buscar] pageIdMap=${Object.keys(pageIdMap).length} dom=${rawAds.length} final=${final.length}`)
     res.json({ profiles: final })
