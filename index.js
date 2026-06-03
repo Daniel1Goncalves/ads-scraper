@@ -213,7 +213,6 @@ app.get('/buscar', async (req, res) => {
     const profiles = []
     Object.entries(pageIdMap).forEach(([name, info], i) => {
       const domAd = domByName[name] || {}
-      if (!domAd.adText && !domAd.landingUrl) return // sem dados do DOM = biblioteca vazia, ignora
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
       const isWhatsApp = !!(domAd.landingUrl && (
