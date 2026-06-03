@@ -40,11 +40,8 @@ function shouldExclude(name, adText, landingUrl) {
   const text = (name + ' ' + adText).toLowerCase()
   const url = (landingUrl || '').toLowerCase()
 
-  // WhatsApp e redes sociais como landing page
+  // Redes sociais como landing page (exceto WhatsApp — é válido)
   if (url && (
-    url.includes('api.whatsapp') ||
-    url.includes('wa.me') ||
-    url.includes('whatsapp.com/send') ||
     url.includes('instagram.com/') ||
     url.includes('t.me/')
   )) return true
@@ -216,7 +213,14 @@ app.get('/buscar', async (req, res) => {
     const profiles = []
     Object.entries(pageIdMap).forEach(([name, info], i) => {
       const domAd = domByName[name] || {}
+      if (!domAd.adText && !domAd.landingUrl) return // sem dados do DOM = biblioteca vazia, ignora
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
+
+      const isWhatsApp = !!(domAd.landingUrl && (
+        domAd.landingUrl.includes('api.whatsapp') ||
+        domAd.landingUrl.includes('wa.me') ||
+        domAd.landingUrl.includes('whatsapp.com/send')
+      ))
 
       const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
       const days = parseDays(domAd.dateText)
@@ -230,6 +234,7 @@ app.get('/buscar', async (req, res) => {
         started_date: domAd.dateText || '',
         thumbnail_url: domAd.thumbnail || '',
         landing_page_url: domAd.landingUrl || '',
+        is_whatsapp: isWhatsApp,
       }
       profiles.push({
         page_id: info.id,
