@@ -12,6 +12,13 @@ async function getBrowser() {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
+      '--disable-gpu',
+      '--disable-software-rasterizer',
+      '--disable-extensions',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+      '--js-flags=--max-old-space-size=512',
     ],
   })
 }
@@ -111,15 +118,16 @@ app.get('/buscar', async (req, res) => {
       console.log('[buscar] timeout DOM — tentando assim mesmo')
     }
 
-    // Scroll para carregar mais
-    for (let i = 0; i < 12; i++) {
-      await page.evaluate(() => window.scrollBy(0, 2500))
-      await page.waitForTimeout(1200)
+    // Scroll para carregar mais (reduzido para não crashar)
+    for (let i = 0; i < 6; i++) {
+      try { await page.evaluate(() => window.scrollBy(0, 2500)) } catch {}
+      await page.waitForTimeout(1000)
     }
-    await page.waitForTimeout(2000)
+    await page.waitForTimeout(1500)
 
     // Extrai todos os anúncios do DOM
-    const rawAds = await page.evaluate(() => {
+    let rawAds = []
+    try { rawAds = await page.evaluate(() => {
       const results = []
       const seen = new Set()
 
@@ -199,7 +207,7 @@ app.get('/buscar', async (req, res) => {
       })
 
       return results
-    })
+    }) } catch (evalErr) { console.error('[buscar] page.evaluate crashed:', evalErr.message) }
 
     console.log(`[buscar] "${q}" → DOM found: ${rawAds.length} ads, pageIdMap: ${Object.keys(pageIdMap).length}`)
 
