@@ -211,17 +211,20 @@ app.get('/buscar', async (req, res) => {
 
     console.log(`[buscar] "${q}" → DOM found: ${rawAds.length} ads, pageIdMap: ${Object.keys(pageIdMap).length}`)
 
-    // Índice rápido dos anúncios do DOM por nome de página
-    const domByName = {}
-    rawAds.forEach(ad => {
-      if (!domByName[ad.pageName]) domByName[ad.pageName] = ad
-    })
-
-    // Monta profiles APENAS dos anunciantes confirmados pela rede do Facebook
+    // Usa rawAds (DOM order = ordem de relevância da biblioteca) como fonte primária
+    // pageIdMap serve apenas para enriquecer com page_id
+    const seenNames = new Set()
     const profiles = []
-    Object.entries(pageIdMap).forEach(([name, info], i) => {
-      const domAd = domByName[name] || {}
+
+    rawAds.forEach((domAd, i) => {
+      const name = domAd.pageName
+      if (!name || seenNames.has(name)) return
+      seenNames.add(name)
+
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
+
+      const info = pageIdMap[name] || {}
+      const pageId = info.id || `dom_${i}`
 
       const isWhatsApp = !!(domAd.landingUrl && (
         domAd.landingUrl.includes('api.whatsapp') ||
@@ -229,7 +232,9 @@ app.get('/buscar', async (req, res) => {
         domAd.landingUrl.includes('whatsapp.com/send')
       ))
 
-      const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
+      const pageUrl = info.id
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
+        : searchUrl
       const days = parseDays(domAd.dateText)
       const adObj = {
         id: `ad_${Date.now()}_${i}`,
@@ -244,18 +249,33 @@ app.get('/buscar', async (req, res) => {
         is_whatsapp: isWhatsApp,
       }
       profiles.push({
-        page_id: info.id,
+        page_id: pageId,
         page_name: name,
         page_url: pageUrl,
         library_url: searchUrl,
-        total_ads: info.count,
+        total_ads: info.count || 1,
         oldest_ad_days: days,
         top_ad: adObj,
         ads: [adObj],
       })
     })
 
-    profiles.sort((a, b) => b.total_ads - a.total_ads)
+    // Complementa com anunciantes do pageIdMap que não apareceram no DOM (aparecem por último)
+    Object.entries(pageIdMap).forEach(([name, info], i) => {
+      if (seenNames.has(name)) return
+      const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
+      profiles.push({
+        page_id: info.id,
+        page_name: name,
+        page_url: pageUrl,
+        library_url: searchUrl,
+        total_ads: info.count || 1,
+        oldest_ad_days: 0,
+        top_ad: { id: `ad_extra_${i}`, page_name: name, page_url: pageUrl, library_url: searchUrl, ad_text: '', days_active: 0, started_date: '', thumbnail_url: '', landing_page_url: '', is_whatsapp: false },
+        ads: [],
+      })
+    })
+
     const final = profiles.slice(0, 50)
 
     console.log(`[buscar] pageIdMap=${Object.keys(pageIdMap).length} dom=${rawAds.length} final=${final.length}`)
