@@ -95,12 +95,7 @@ app.get('/buscar', async (req, res) => {
         const json = JSON.parse(text.startsWith('for (;;);') ? text.slice(9) : text)
         const pages = json?.data?.ad_library_main?.dynamic_filter_options?.pages
         if (pages) {
-          pages.forEach(p => {
-            if (p.key && p.display_name) {
-              if (!pageIdMap[p.display_name]) pageIdMap[p.display_name] = []
-              pageIdMap[p.display_name].push({ id: p.key, count: p.count || 1 })
-            }
-          })
+          pages.forEach(p => { if (p.key && p.display_name) pageIdMap[p.display_name] = { id: p.key, count: p.count || 1 } })
         }
       } catch {}
     })
@@ -249,12 +244,8 @@ app.get('/buscar', async (req, res) => {
 
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
-      // Usa page_id extraído do DOM quando disponível (mais confiável)
       const domId = domAd.domPageId || ''
-      const infoList = pageIdMap[name] || []
-      // Remove da lista o entry que bate com o domId, se houver
-      const matchIdx = domId ? infoList.findIndex(x => x.id === domId) : -1
-      const info = matchIdx >= 0 ? infoList.splice(matchIdx, 1)[0] : (infoList.shift() || {})
+      const info = pageIdMap[name] || {}
       const pageId = domId || info.id || `dom_${i}`
 
       const isWhatsApp = !!(domAd.landingUrl && (
@@ -265,7 +256,7 @@ app.get('/buscar', async (req, res) => {
 
       const pageUrl = pageId && !pageId.startsWith('dom_')
         ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${pageId}`
-        : `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&q=${encodeURIComponent(name)}&search_type=page`
+        : searchUrl
       const days = parseDays(domAd.dateText)
       const adObj = {
         id: `ad_${Date.now()}_${i}`,
@@ -292,22 +283,18 @@ app.get('/buscar', async (req, res) => {
     })
 
     // Complementa com anunciantes do pageIdMap que não apareceram no DOM (aparecem por último)
-    Object.entries(pageIdMap).forEach(([name, infoList], i) => {
-      ;(Array.isArray(infoList) ? infoList : [infoList]).forEach((info, j) => {
-        const deduKey = `${name}::extra_${j}`
-        if (seenNames.has(deduKey)) return
-        seenNames.add(deduKey)
-        const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
-        profiles.push({
-          page_id: info.id,
-          page_name: name,
-          page_url: pageUrl,
-          library_url: searchUrl,
-          total_ads: info.count || 1,
-          oldest_ad_days: 0,
-          top_ad: { id: `ad_extra_${i}_${j}`, page_name: name, page_url: pageUrl, library_url: searchUrl, ad_text: '', days_active: 0, started_date: '', thumbnail_url: '', landing_page_url: '', is_whatsapp: false },
-          ads: [],
-        })
+    Object.entries(pageIdMap).forEach(([name, info], i) => {
+      if (seenNames.has(`${name}::extra`)) return
+      const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
+      profiles.push({
+        page_id: info.id,
+        page_name: name,
+        page_url: pageUrl,
+        library_url: searchUrl,
+        total_ads: info.count || 1,
+        oldest_ad_days: 0,
+        top_ad: { id: `ad_extra_${i}`, page_name: name, page_url: pageUrl, library_url: searchUrl, ad_text: '', days_active: 0, started_date: '', thumbnail_url: '', landing_page_url: '', is_whatsapp: false },
+        ads: [],
       })
     })
 
