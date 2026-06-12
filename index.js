@@ -265,7 +265,7 @@ app.get('/buscar', async (req, res) => {
 
       const pageUrl = pageId && !pageId.startsWith('dom_')
         ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${pageId}`
-        : searchUrl
+        : `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&q=${encodeURIComponent(name)}&search_type=page`
       const days = parseDays(domAd.dateText)
       const adObj = {
         id: `ad_${Date.now()}_${i}`,
