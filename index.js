@@ -202,25 +202,7 @@ app.get('/buscar', async (req, res) => {
             if (t.match(/\d+\s*de\s+\w+\s+de\s+\d{4}/) && t.length < 80) dateText = t
           })
 
-          // page_id direto do DOM — extrai de links facebook.com no card
-          let domPageId = ''
-          for (const a of card.querySelectorAll('a[href*="facebook.com"]')) {
-            const h = a.href || ''
-            // profile.php?id=123456
-            let m = h.match(/profile\.php\?id=(\d+)/)
-            if (m) { domPageId = m[1]; break }
-            // /people/name/123456
-            m = h.match(/\/people\/[^/]+\/(\d+)/)
-            if (m) { domPageId = m[1]; break }
-            // view_all_page_id=123456
-            m = h.match(/view_all_page_id=(\d+)/)
-            if (m) { domPageId = m[1]; break }
-            // facebook.com/123456 (só dígitos no path)
-            m = h.match(/facebook\.com\/(\d{8,})/)
-            if (m) { domPageId = m[1]; break }
-          }
-
-          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText, domPageId })
+          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText })
         } catch {}
       })
 
@@ -236,17 +218,13 @@ app.get('/buscar', async (req, res) => {
 
     rawAds.forEach((domAd, i) => {
       const name = domAd.pageName
-      if (!name) return
-      // Dedup por nome+url para permitir anunciantes homônimos
-      const deduKey = `${name}::${(domAd.landingUrl || '').slice(0, 60)}`
-      if (seenNames.has(deduKey)) return
-      seenNames.add(deduKey)
+      if (!name || seenNames.has(name)) return
+      seenNames.add(name)
 
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
-      const domId = domAd.domPageId || ''
       const info = pageIdMap[name] || {}
-      const pageId = domId || info.id || `dom_${i}`
+      const pageId = info.id || `dom_${i}`
 
       const isWhatsApp = !!(domAd.landingUrl && (
         domAd.landingUrl.includes('api.whatsapp') ||
@@ -254,8 +232,8 @@ app.get('/buscar', async (req, res) => {
         domAd.landingUrl.includes('whatsapp.com/send')
       ))
 
-      const pageUrl = pageId && !pageId.startsWith('dom_')
-        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${pageId}`
+      const pageUrl = info.id
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
         : searchUrl
       const days = parseDays(domAd.dateText)
       const adObj = {
@@ -284,7 +262,7 @@ app.get('/buscar', async (req, res) => {
 
     // Complementa com anunciantes do pageIdMap que não apareceram no DOM (aparecem por último)
     Object.entries(pageIdMap).forEach(([name, info], i) => {
-      if (seenNames.has(`${name}::extra`)) return
+      if (seenNames.has(name)) return
       const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
       profiles.push({
         page_id: info.id,
