@@ -207,7 +207,25 @@ app.get('/buscar', async (req, res) => {
             if (t.match(/\d+\s*de\s+\w+\s+de\s+\d{4}/) && t.length < 80) dateText = t
           })
 
-          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText })
+          // page_id direto do DOM — extrai de links facebook.com no card
+          let domPageId = ''
+          for (const a of card.querySelectorAll('a[href*="facebook.com"]')) {
+            const h = a.href || ''
+            // profile.php?id=123456
+            let m = h.match(/profile\.php\?id=(\d+)/)
+            if (m) { domPageId = m[1]; break }
+            // /people/name/123456
+            m = h.match(/\/people\/[^/]+\/(\d+)/)
+            if (m) { domPageId = m[1]; break }
+            // view_all_page_id=123456
+            m = h.match(/view_all_page_id=(\d+)/)
+            if (m) { domPageId = m[1]; break }
+            // facebook.com/123456 (só dígitos no path)
+            m = h.match(/facebook\.com\/(\d{8,})/)
+            if (m) { domPageId = m[1]; break }
+          }
+
+          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText, domPageId })
         } catch {}
       })
 
@@ -231,9 +249,13 @@ app.get('/buscar', async (req, res) => {
 
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
+      // Usa page_id extraído do DOM quando disponível (mais confiável)
+      const domId = domAd.domPageId || ''
       const infoList = pageIdMap[name] || []
-      const info = infoList.shift() || {}
-      const pageId = info.id || `dom_${i}`
+      // Remove da lista o entry que bate com o domId, se houver
+      const matchIdx = domId ? infoList.findIndex(x => x.id === domId) : -1
+      const info = matchIdx >= 0 ? infoList.splice(matchIdx, 1)[0] : (infoList.shift() || {})
+      const pageId = domId || info.id || `dom_${i}`
 
       const isWhatsApp = !!(domAd.landingUrl && (
         domAd.landingUrl.includes('api.whatsapp') ||
@@ -241,8 +263,8 @@ app.get('/buscar', async (req, res) => {
         domAd.landingUrl.includes('whatsapp.com/send')
       ))
 
-      const pageUrl = info.id
-        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
+      const pageUrl = pageId && !pageId.startsWith('dom_')
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${pageId}`
         : searchUrl
       const days = parseDays(domAd.dateText)
       const adObj = {
