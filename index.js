@@ -125,9 +125,10 @@ app.get('/buscar', async (req, res) => {
         // Fonte 3: busca recursiva por page_id em qualquer lugar da resposta
         const findPageIds = (obj, depth = 0) => {
           if (!obj || typeof obj !== 'object' || depth > 6) return
-          if (obj.page_id && obj.page_name && typeof obj.page_id === 'string') {
-            if (!pageIdMap[obj.page_name]) {
-              pageIdMap[obj.page_name] = { id: obj.page_id, count: 1 }
+          if (obj.page_id && obj.page_name) {
+            const pid = String(obj.page_id)
+            if (/^\d+$/.test(pid) && !pageIdMap[obj.page_name]) {
+              pageIdMap[obj.page_name] = { id: pid, count: 1 }
             }
           }
           for (const v of Object.values(obj)) {
