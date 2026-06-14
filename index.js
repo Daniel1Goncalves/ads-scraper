@@ -86,17 +86,57 @@ app.get('/buscar', async (req, res) => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false })
     })
 
-    // Captura page_id dos anunciantes via rede
+    // Captura page_id dos anunciantes via rede (múltiplas fontes GraphQL)
     const pageIdMap = {}
     page.on('response', async (response) => {
       if (!response.url().includes('/api/graphql')) return
       try {
         const text = await response.text()
         const json = JSON.parse(text.startsWith('for (;;);') ? text.slice(9) : text)
+
+        // Fonte 1: filtros laterais (autocomplete)
         const pages = json?.data?.ad_library_main?.dynamic_filter_options?.pages
         if (pages) {
           pages.forEach(p => { if (p.key && p.display_name) pageIdMap[p.display_name] = { id: p.key, count: p.count || 1 } })
         }
+
+        // Fonte 2: resultados dos anúncios (contém page_id de cada ad)
+        const edges = json?.data?.ad_library_main?.search_results_connection?.edges
+        if (edges) {
+          edges.forEach(edge => {
+            const node = edge?.node
+            if (!node) return
+            const pid = node.page_id || node.page?.id
+            const pname = node.page_name || node.page?.name
+            if (pid && pname && !pageIdMap[pname]) {
+              pageIdMap[pname] = { id: String(pid), count: 1 }
+            }
+            // Às vezes está em collated_results
+            ;(node.collated_results || []).forEach((r) => {
+              const rpid = r.page_id || r.page?.id
+              const rpname = r.page_name || r.page?.name
+              if (rpid && rpname && !pageIdMap[rpname]) {
+                pageIdMap[rpname] = { id: String(rpid), count: 1 }
+              }
+            })
+          })
+        }
+
+        // Fonte 3: busca recursiva por page_id em qualquer lugar da resposta
+        const findPageIds = (obj, depth = 0) => {
+          if (!obj || typeof obj !== 'object' || depth > 6) return
+          if (obj.page_id && obj.page_name && typeof obj.page_id === 'string') {
+            if (!pageIdMap[obj.page_name]) {
+              pageIdMap[obj.page_name] = { id: obj.page_id, count: 1 }
+            }
+          }
+          for (const v of Object.values(obj)) {
+            if (Array.isArray(v)) v.forEach(i => findPageIds(i, depth + 1))
+            else if (typeof v === 'object') findPageIds(v, depth + 1)
+          }
+        }
+        if (json?.data) findPageIds(json.data)
+
       } catch {}
     })
 
