@@ -433,6 +433,229 @@ app.post('/scrape', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }))
 
+// DIAGNÓSTICO — captura tudo que o Meta envia e como o DOM está estruturado
+app.get('/diagnostico', async (req, res) => {
+  const { q } = req.query
+  if (!q) return res.status(400).json({ error: 'Keyword obrigatória. Ex: /diagnostico?q=figurinhas' })
+
+  let browser
+  try {
+    browser = await getBrowser()
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      locale: 'pt-BR',
+      viewport: { width: 1280, height: 900 },
+    })
+    const page = await context.newPage()
+    await page.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => false }) })
+
+    // Captura TODAS as respostas GraphQL completas (primeiros 5)
+    const graphqlResponses = []
+    const pageIdMap = {}
+
+    page.on('response', async (response) => {
+      if (!response.url().includes('/api/graphql')) return
+      try {
+        const text = await response.text()
+        const json = JSON.parse(text.startsWith('for (;;);') ? text.slice(9) : text)
+
+        // Guarda resposta bruta (primeiras 5 apenas, limitado a 50kb cada)
+        if (graphqlResponses.length < 5) {
+          const raw = JSON.stringify(json)
+          graphqlResponses.push({
+            url: response.url().slice(0, 120),
+            size_bytes: raw.length,
+            // Mostra as top-level keys do data
+            data_keys: json?.data ? Object.keys(json.data) : [],
+            // Mostra estrutura do ad_library_main se existir
+            ad_library_main_keys: json?.data?.ad_library_main ? Object.keys(json.data.ad_library_main) : [],
+            // Amostra das edges (primeiros 2 anúncios completos)
+            edges_sample: (() => {
+              const edges = json?.data?.ad_library_main?.search_results_connection?.edges
+              if (!edges) return null
+              return edges.slice(0, 2).map(e => {
+                const n = e?.node || {}
+                return {
+                  // Todos os campos de primeiro nível do node
+                  node_keys: Object.keys(n),
+                  page_id: n.page_id,
+                  page_name: n.page_name,
+                  'page.id': n.page?.id,
+                  'page.name': n.page?.name,
+                  collated_results_count: (n.collated_results || []).length,
+                  // Amostra do primeiro collated_result
+                  collated_sample: (n.collated_results || []).slice(0, 1).map(r => ({
+                    keys: Object.keys(r),
+                    page_id: r.page_id,
+                    page_name: r.page_name,
+                    'page.id': r.page?.id,
+                    'page.name': r.page?.name,
+                  })),
+                }
+              })
+            })(),
+            // Fonte 1: filtros laterais
+            filter_pages: (() => {
+              const pages = json?.data?.ad_library_main?.dynamic_filter_options?.pages
+              if (!pages) return null
+              return pages.slice(0, 5).map(p => ({ key: p.key, display_name: p.display_name, count: p.count }))
+            })(),
+            // Busca recursiva: todos os pares page_id+page_name encontrados
+            found_page_ids: (() => {
+              const found = []
+              const scan = (obj, path = '', depth = 0) => {
+                if (!obj || typeof obj !== 'object' || depth > 8) return
+                if (obj.page_id !== undefined && obj.page_name !== undefined) {
+                  found.push({ path, page_id: obj.page_id, page_id_type: typeof obj.page_id, page_name: obj.page_name })
+                }
+                for (const [k, v] of Object.entries(obj)) {
+                  if (Array.isArray(v)) v.slice(0, 3).forEach((i, idx) => scan(i, `${path}.${k}[${idx}]`, depth + 1))
+                  else if (typeof v === 'object') scan(v, `${path}.${k}`, depth + 1)
+                }
+              }
+              if (json?.data) scan(json.data, 'data')
+              return found.slice(0, 20)
+            })(),
+          })
+        }
+
+        // Preenche pageIdMap como de costume
+        const pages = json?.data?.ad_library_main?.dynamic_filter_options?.pages
+        if (pages) {
+          pages.forEach(p => { if (p.key && p.display_name) pageIdMap[p.display_name] = { id: p.key } })
+        }
+        const edges = json?.data?.ad_library_main?.search_results_connection?.edges
+        if (edges) {
+          edges.forEach(edge => {
+            const node = edge?.node
+            if (!node) return
+            const pid = node.page_id || node.page?.id
+            const pname = node.page_name || node.page?.name
+            if (pid && pname && !pageIdMap[pname]) pageIdMap[pname] = { id: String(pid) }
+            ;(node.collated_results || []).forEach(r => {
+              const rpid = r.page_id || r.page?.id
+              const rpname = r.page_name || r.page?.name
+              if (rpid && rpname && !pageIdMap[rpname]) pageIdMap[rpname] = { id: String(rpid) }
+            })
+          })
+        }
+        const findPageIds = (obj, depth = 0) => {
+          if (!obj || typeof obj !== 'object' || depth > 6) return
+          if (obj.page_id && obj.page_name) {
+            const pid = String(obj.page_id)
+            if (/^\d+$/.test(pid) && !pageIdMap[obj.page_name]) pageIdMap[obj.page_name] = { id: pid }
+          }
+          for (const v of Object.values(obj)) {
+            if (Array.isArray(v)) v.forEach(i => findPageIds(i, depth + 1))
+            else if (typeof v === 'object') findPageIds(v, depth + 1)
+          }
+        }
+        if (json?.data) findPageIds(json.data)
+      } catch {}
+    })
+
+    const searchUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&q=${encodeURIComponent(q)}&search_type=keyword_unordered`
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForTimeout(4000)
+    await dismissCookies(page)
+    try {
+      await page.waitForFunction(() => Array.from(document.querySelectorAll('span')).some(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored'), { timeout: 20000 })
+    } catch {}
+    for (let i = 0; i < 3; i++) {
+      try { await page.evaluate(() => window.scrollBy(0, 2500)) } catch {}
+      await page.waitForTimeout(1200)
+    }
+    await page.waitForTimeout(1500)
+
+    // Análise DOM: mostra estrutura dos primeiros 3 cards
+    const domAnalysis = await page.evaluate(() => {
+      const spans = Array.from(document.querySelectorAll('span'))
+      const sponsoredEls = spans.filter(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
+
+      return sponsoredEls.slice(0, 3).map((sponsoredEl, idx) => {
+        // Sobe para achar o card
+        let card = sponsoredEl
+        for (let i = 0; i < 15; i++) {
+          card = card.parentElement
+          if (!card) break
+          const rect = card.getBoundingClientRect()
+          if (rect.height > 150 && rect.width > 250) break
+        }
+        if (!card) return { idx, error: 'card nao encontrado' }
+
+        // Nome da página
+        let pageName = '', pageNamePath = ''
+        let el = sponsoredEl
+        for (let i = 0; i < 6; i++) {
+          el = el.parentElement
+          if (!el) break
+          const prev = el.previousElementSibling
+          if (prev) {
+            const t = prev.textContent.trim()
+            if (t.length > 1 && t.length < 100 && t !== 'Patrocinado' && t !== 'Sponsored') {
+              pageName = t; pageNamePath = `sponsoredEl.parent[${i}].previousSibling`; break
+            }
+          }
+        }
+
+        // Links dentro do card
+        const links = Array.from(card.querySelectorAll('a[href]')).slice(0, 8).map(a => ({
+          text: a.textContent.trim().slice(0, 80),
+          href: a.href.slice(0, 150),
+          isFacebook: a.href.includes('facebook.com'),
+        }))
+
+        // Imagens
+        const images = Array.from(card.querySelectorAll('img')).slice(0, 4).map(img => ({
+          src: (img.src || '').slice(0, 100),
+          width: img.naturalWidth || img.width,
+          height: img.naturalHeight || img.height,
+        }))
+
+        // Textos maiores (candidatos a adText)
+        const texts = []
+        card.querySelectorAll('div, span, p').forEach(el => {
+          if (el.children.length > 3) return
+          const t = el.textContent.trim()
+          if (t.length > 60 && t.length < 800) texts.push(t.slice(0, 200))
+        })
+
+        // IDs e atributos do card
+        const cardAttrs = {}
+        Array.from(card.attributes || []).forEach(a => { cardAttrs[a.name] = a.value.slice(0, 100) })
+
+        // HTML snapshot pequeno
+        const htmlSnippet = card.innerHTML.slice(0, 1500)
+
+        return {
+          idx,
+          pageName,
+          pageNamePath,
+          links,
+          images,
+          texts: texts.slice(0, 5),
+          cardTag: card.tagName,
+          cardAttrs,
+          htmlSnippet,
+        }
+      })
+    })
+
+    res.json({
+      keyword: q,
+      graphql_responses_captured: graphqlResponses.length,
+      page_id_map_final: pageIdMap,
+      page_id_map_count: Object.keys(pageIdMap).length,
+      graphql_responses: graphqlResponses,
+      dom_cards: domAnalysis,
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  } finally {
+    if (browser) await browser.close()
+  }
+})
+
 function parseDays(text) {
   if (!text) return 0
   const dateMatch = text.match(/(\d+)\s+de\s+(\w+)\s+de\s+(\d{4})/)
