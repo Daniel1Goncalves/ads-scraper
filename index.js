@@ -246,39 +246,34 @@ app.get('/buscar', async (req, res) => {
             if (t.match(/\d+\s*de\s+\w+\s+de\s+\d{4}/) && t.length < 80) dateText = t
           })
 
-          // Page ID extraído do link do perfil facebook.com/[NUMERIC_ID]/
-          // IMPORTANTE: ignora links de tracking (l.php, m.facebook, etc.) que contêm IDs falsos
+          // Page ID e URL do perfil extraídos dos links do card
+          // IMPORTANTE: NÃO usa break — precisa capturar tanto pageIdFromLink quanto profileUrl
           let pageIdFromLink = ''
           let profileUrl = ''
           for (const a of card.querySelectorAll('a[href*="facebook.com"]')) {
             const href = a.href
             const isTracking = href.includes('/l.php') || href.startsWith('https://l.') || href.startsWith('http://l.')
             const isContentLink = href.includes('/posts/') || href.includes('/photos/') || href.includes('/videos/') || href.includes('/reels/') || href.includes('/sharer/') || href.includes('/plugins/') || href.includes('/share/')
-            // Pula links de tracking e conteúdo — NUNCA são o perfil da página
             if (isTracking || isContentLink) continue
 
-            // Tenta extrair ID numérico do link direto: facebook.com/12345678/
-            let m = href.match(/facebook\.com\/(\d{8,})\/?/)
-            if (m) {
-              // Só aceita se for www.facebook.com ou facebook.com (não subdomínio de tracking)
-              const domain = href.match(/https?:\/\/([^\/]+)/)
-              if (domain && (domain[1] === 'www.facebook.com' || domain[1] === 'facebook.com' || domain[1] === 'web.facebook.com')) {
-                pageIdFromLink = m[1]; break
-              }
-              // Subdomínio como m.facebook.com: usa como fallback se não tiver nada
-              if (!pageIdFromLink) pageIdFromLink = m[1]
-              continue
-            }
-            // Tenta extrair ID de profile.php?id=
-            m = href.match(/facebook\.com\/profile\.php\?id=(\d+)/)
-            if (m) { pageIdFromLink = m[1]; break }
+            const domain = href.match(/https?:\/\/([^\/]+)/)
+            const isMainDomain = domain && ['www.facebook.com','facebook.com','web.facebook.com'].includes(domain[1])
 
-            // Guarda URL do perfil (vanity) como fallback — só de www.facebook.com
-            if (!profileUrl && !isTracking && !isContentLink) {
-              const domain = href.match(/https?:\/\/([^\/]+)/)
-              if (domain && (domain[1] === 'www.facebook.com' || domain[1] === 'facebook.com' || domain[1] === 'web.facebook.com')) {
-                profileUrl = href
-              }
+            // Tenta extrair ID numérico
+            const m = href.match(/facebook\.com\/(\d{8,})\/?/)
+            if (m && isMainDomain && !pageIdFromLink) {
+              pageIdFromLink = m[1]
+            }
+
+            // Tenta extrair ID de profile.php?id=
+            const pm = href.match(/facebook\.com\/profile\.php\?id=(\d+)/)
+            if (pm && isMainDomain && !pageIdFromLink) {
+              pageIdFromLink = pm[1]
+            }
+
+            // Guarda URL do perfil (primeiro link não-tracking do domínio principal)
+            if (!profileUrl && isMainDomain && href.match(/facebook\.com\/[^/]+\/?$/)) {
+              profileUrl = href
             }
           }
 
