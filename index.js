@@ -348,6 +348,31 @@ app.get('/buscar', async (req, res) => {
       })
     })
 
+    // Tenta resolver vanity URLs para page_ids numéricos (via HTTP leve no browser)
+    const vanityProfiles = profiles.filter(p => p.page_id && p.page_id.startsWith('vanity_'))
+    if (vanityProfiles.length > 0) {
+      console.log(`[buscar] resolvendo ${vanityProfiles.length} vanity URLs...`)
+      for (const p of vanityProfiles) {
+        try {
+          const resp = await page.request.get(p.page_url, {
+            timeout: 5000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+          })
+          const html = await resp.text()
+          const m = html.match(/fb:\/\/page\/(\d+)/)
+          if (m) {
+            const numId = m[1]
+            p.page_id = numId
+            p.page_url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${numId}`
+            if (p.top_ad) p.top_ad.page_url = p.page_url
+            console.log(`[buscar] vanity resolvido: ${p.page_name} → ${numId}`)
+          }
+        } catch (e) {
+          console.log(`[buscar] erro ao resolver ${p.page_name}: ${e.message}`)
+        }
+      }
+    }
+
     const final = profiles.slice(0, 50)
 
     console.log(`[buscar] pageIdMap=${Object.keys(pageIdMap).length} dom=${rawAds.length} final=${final.length}`)
