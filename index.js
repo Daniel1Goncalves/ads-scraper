@@ -175,6 +175,16 @@ app.get('/buscar', async (req, res) => {
       const results = []
       const seen = new Set()
 
+      // Coleta todos os "Identificação da biblioteca" da página em ordem
+      // Eles aparecem uma vez por card, na mesma ordem dos cards
+      const allLibIds = []
+      document.querySelectorAll('span, div').forEach(el => {
+        if (el.children.length > 0) return
+        const t = el.textContent || ''
+        const m = t.match(/^(\d{15,20})$/)
+        if (m) allLibIds.push(m[1])
+      })
+
       const spans = Array.from(document.querySelectorAll('span'))
       const sponsoredEls = spans.filter(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
 
@@ -246,13 +256,8 @@ app.get('/buscar', async (req, res) => {
             if (t.match(/\d+\s*de\s+\w+\s+de\s+\d{4}/) && t.length < 80) dateText = t
           })
 
-          // Identificação da biblioteca (ID do anúncio) — aparece como texto no card
-          // Ex: "Identificação da biblioteca: 27389241924003618"
-          let adLibraryId = ''
-          const fullText = card.innerText || card.textContent || ''
-          const libMatch = fullText.match(/Identificação da biblioteca[:\s]+(\d{10,})/i)
-            || fullText.match(/Library ID[:\s]+(\d{10,})/i)
-          if (libMatch) adLibraryId = libMatch[1]
+          // Identificação da biblioteca — pega o ID correspondente à posição deste card
+          const adLibraryId = allLibIds[results.length] || ''
 
           // Page ID e URL do perfil extraídos dos links do card
           // IMPORTANTE: NÃO usa break — precisa capturar tanto pageIdFromLink quanto profileUrl
