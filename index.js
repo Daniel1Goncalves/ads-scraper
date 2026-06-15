@@ -243,7 +243,14 @@ app.get('/buscar', async (req, res) => {
             if (t.match(/\d+\s*de\s+\w+\s+de\s+\d{4}/) && t.length < 80) dateText = t
           })
 
-          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText })
+          // Page ID extraído do link do perfil facebook.com/[NUMERIC_ID]/
+          let pageIdFromLink = ''
+          for (const a of card.querySelectorAll('a[href*="facebook.com"]')) {
+            const m = a.href.match(/facebook\.com\/(\d{8,})\/?/)
+            if (m) { pageIdFromLink = m[1]; break }
+          }
+
+          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText, pageIdFromLink })
         } catch {}
       })
 
@@ -265,7 +272,9 @@ app.get('/buscar', async (req, res) => {
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
       const info = pageIdMap[name] || {}
-      const pageId = info.id || `dom_${i}`
+      // Prioridade: filter autocomplete → link do perfil no DOM → fallback sintético
+      const resolvedId = info.id || domAd.pageIdFromLink || null
+      const pageId = resolvedId || `dom_${i}`
 
       const isWhatsApp = !!(domAd.landingUrl && (
         domAd.landingUrl.includes('api.whatsapp') ||
@@ -273,8 +282,8 @@ app.get('/buscar', async (req, res) => {
         domAd.landingUrl.includes('whatsapp.com/send')
       ))
 
-      const pageUrl = info.id
-        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
+      const pageUrl = resolvedId
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${resolvedId}`
         : searchUrl
       const days = parseDays(domAd.dateText)
       const adObj = {
