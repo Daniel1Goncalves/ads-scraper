@@ -283,7 +283,7 @@ app.get('/buscar', async (req, res) => {
       ))
 
       const pageUrl = resolvedId
-        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${resolvedId}`
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${resolvedId}`
         : searchUrl
       const days = parseDays(domAd.dateText)
       const adObj = {
@@ -313,7 +313,7 @@ app.get('/buscar', async (req, res) => {
     // Complementa com anunciantes do pageIdMap que não apareceram no DOM (aparecem por último)
     Object.entries(pageIdMap).forEach(([name, info], i) => {
       if (seenNames.has(name)) return
-      const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&view_all_page_id=${info.id}`
+      const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${info.id}`
       profiles.push({
         page_id: info.id,
         page_name: name,
