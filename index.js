@@ -356,7 +356,7 @@ app.get('/buscar', async (req, res) => {
       console.log(`[buscar] resolvendo ${vanityProfiles.length} vanity URLs...`)
       for (const p of vanityProfiles) {
         const fbUrl = p._fbUrl
-        if (!fbUrl) continue
+        if (!fbUrl) { console.log(`[buscar] ${p.page_name}: sem _fbUrl`); continue }
         try {
           const html = await page.evaluate(async (url) => {
             const r = await fetch(url, { redirect: 'follow', credentials: 'include' })
@@ -369,6 +369,8 @@ app.get('/buscar', async (req, res) => {
             p.page_url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${numId}`
             if (p.top_ad) p.top_ad.page_url = p.page_url
             console.log(`[buscar] vanity resolvido: ${p.page_name} → ${numId}`)
+          } else {
+            console.log(`[buscar] ${p.page_name}: página não tinha fb://page/ID no HTML (html length: ${html.length})`)
           }
         } catch (e) {
           console.log(`[buscar] erro ao resolver ${p.page_name}: ${e.message}`)
@@ -378,7 +380,11 @@ app.get('/buscar', async (req, res) => {
 
     const final = profiles.slice(0, 50).map(p => { const { _fbUrl, ...rest } = p; return rest })
 
-    console.log(`[buscar] pageIdMap=${Object.keys(pageIdMap).length} dom=${rawAds.length} final=${final.length}`)
+    // Log resumo dos tipos de page_id
+    const numNum = final.filter((p: any) => p.page_id && /^\d+$/.test(p.page_id)).length
+    const numVanity = final.filter((p: any) => p.page_id && p.page_id.startsWith('vanity_')).length
+    const numDom = final.filter((p: any) => p.page_id && p.page_id.startsWith('dom_')).length
+    console.log(`[buscar] pageIdMap=${Object.keys(pageIdMap).length} dom=${rawAds.length} final=${final.length} | num=${numNum} vanity=${numVanity} dom=${numDom}`)
     res.json({ profiles: final })
 
   } catch (err) {
