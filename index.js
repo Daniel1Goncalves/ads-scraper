@@ -299,18 +299,10 @@ app.get('/buscar', async (req, res) => {
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
       const info = pageIdMap[name] || {}
-      // Prioridade:
-      // 1. Source 1 (filter autocomplete) → view_all_page_id confiável
-      // 2. DOM profileUrl → Facebook profile (não Ad Library, mas vai pra página certa)
-      // 3. Vanity → tentativa view_all_page_id=vanity
-      // 4. Fallback → searchUrl original
-      const filterId = info.source === 1 ? info.id : null
-      const profileFacebookUrl = domAd.profileUrl || ''
-      const vanityMatch = profileFacebookUrl
-        ? profileFacebookUrl.match(/facebook\.com\/([^/?]+)/)
-        : null
-      const vanityName = vanityMatch ? vanityMatch[1] : null
-      const pageId = filterId || (vanityName ? `vanity_${vanityName}` : `dom_${i}`)
+      // Apenas o filter autocomplete do GraphQL tem o ID correto para view_all_page_id
+      // IDs do DOM (profile links) são IDs do perfil Facebook — diferentes dos IDs da biblioteca
+      const libraryId = info.id || null
+      const pageId = libraryId || domAd.pageIdFromLink || `dom_${i}`
 
       const isWhatsApp = !!(domAd.landingUrl && (
         domAd.landingUrl.includes('api.whatsapp') ||
@@ -318,17 +310,9 @@ app.get('/buscar', async (req, res) => {
         domAd.landingUrl.includes('whatsapp.com/send')
       ))
 
-      // Constrói URL da melhor forma possível
-      let pageUrl
-      if (filterId) {
-        pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${filterId}`
-      } else if (profileFacebookUrl) {
-        pageUrl = profileFacebookUrl
-      } else if (vanityName) {
-        pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${vanityName}`
-      } else {
-        pageUrl = searchUrl
-      }
+      const pageUrl = libraryId
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${libraryId}`
+        : searchUrl
       const days = parseDays(domAd.dateText)
       const adObj = {
         id: `ad_${Date.now()}_${i}`,
