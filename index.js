@@ -285,8 +285,9 @@ app.get('/buscar', async (req, res) => {
       // Prioridade: filter autocomplete/GraphQL → link do perfil no DOM (numérico) → profile.php?id → URL do perfil (vanity) → fallback sintético
       const resolvedId = info.id || domAd.pageIdFromLink || null
       // Extrai vanity do profileUrl se existir (ex: "cocacolabr" de "facebook.com/cocacolabr")
-      const vanityMatch = !resolvedId && domAd.profileUrl
-        ? domAd.profileUrl.match(/facebook\.com\/([^/?]+)/)
+      const profileFacebookUrl = !resolvedId && domAd.profileUrl ? domAd.profileUrl : ''
+      const vanityMatch = profileFacebookUrl
+        ? profileFacebookUrl.match(/facebook\.com\/([^/?]+)/)
         : null
       const vanityName = vanityMatch ? vanityMatch[1] : null
       const pageId = resolvedId || (vanityName ? `vanity_${vanityName}` : `dom_${i}`)
@@ -329,6 +330,7 @@ app.get('/buscar', async (req, res) => {
         oldest_ad_days: days,
         top_ad: adObj,
         ads: [adObj],
+        _fbUrl: profileFacebookUrl || undefined,
       })
     })
 
@@ -348,17 +350,18 @@ app.get('/buscar', async (req, res) => {
       })
     })
 
-    // Tenta resolver vanity URLs para page_ids numéricos (via HTTP leve no browser)
+    // Tenta resolver vanity URLs para page_ids numéricos (fetch dentro do browser, compartilha cookies)
     const vanityProfiles = profiles.filter(p => p.page_id && p.page_id.startsWith('vanity_'))
     if (vanityProfiles.length > 0) {
       console.log(`[buscar] resolvendo ${vanityProfiles.length} vanity URLs...`)
       for (const p of vanityProfiles) {
+        const fbUrl = p._fbUrl
+        if (!fbUrl) continue
         try {
-          const resp = await page.request.get(p.page_url, {
-            timeout: 5000,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-          })
-          const html = await resp.text()
+          const html = await page.evaluate(async (url) => {
+            const r = await fetch(url, { redirect: 'follow', credentials: 'include' })
+            return await r.text()
+          }, fbUrl)
           const m = html.match(/fb:\/\/page\/(\d+)/)
           if (m) {
             const numId = m[1]
@@ -373,7 +376,7 @@ app.get('/buscar', async (req, res) => {
       }
     }
 
-    const final = profiles.slice(0, 50)
+    const final = profiles.slice(0, 50).map(p => { const { _fbUrl, ...rest } = p; return rest })
 
     console.log(`[buscar] pageIdMap=${Object.keys(pageIdMap).length} dom=${rawAds.length} final=${final.length}`)
     res.json({ profiles: final })
