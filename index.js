@@ -272,7 +272,7 @@ app.get('/buscar', async (req, res) => {
             }
 
             // Guarda URL do perfil (primeiro link não-tracking do domínio principal)
-            if (!profileUrl && isMainDomain && href.match(/facebook\.com\/[^/]+\/?$/)) {
+            if (!profileUrl && isMainDomain) {
               profileUrl = href
             }
           }
