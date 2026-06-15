@@ -95,17 +95,19 @@ app.get('/buscar', async (req, res) => {
         const json = JSON.parse(text.startsWith('for (;;);') ? text.slice(9) : text)
 
         // Helper para adicionar ao pageIdMap com nome normalizado (trim)
-        const addToMap = (rawName, id, count = 1) => {
+        // source=1: filter autocomplete (confiável para view_all_page_id)
+        // source=2: edges/recursive scan (pode não funcionar como page_id no Ad Library)
+        const addToMap = (rawName, id, count = 1, source = 2) => {
           const key = rawName.trim()
           if (key && id && !pageIdMap[key]) {
-            pageIdMap[key] = { id: String(id), count }
+            pageIdMap[key] = { id: String(id), count, source }
           }
         }
 
-        // Fonte 1: filtros laterais (autocomplete)
+        // Fonte 1: filtros laterais (autocomplete) — IDs CONFIÁVEIS
         const pages = json?.data?.ad_library_main?.dynamic_filter_options?.pages
         if (pages) {
-          pages.forEach(p => { if (p.key && p.display_name) addToMap(p.display_name, p.key, p.count) })
+          pages.forEach(p => { if (p.key && p.display_name) addToMap(p.display_name, p.key, p.count, 1) })
         }
 
         // Fonte 2: resultados dos anúncios (contém page_id de cada ad)
@@ -116,12 +118,11 @@ app.get('/buscar', async (req, res) => {
             if (!node) return
             const pid = node.page_id || node.page?.id
             const pname = node.page_name || node.page?.name
-            if (pid && pname) addToMap(pname, pid)
-            // Às vezes está em collated_results
+            if (pid && pname) addToMap(pname, pid, 1, 2)
             ;(node.collated_results || []).forEach((r) => {
               const rpid = r.page_id || r.page?.id
               const rpname = r.page_name || r.page?.name
-              if (rpid && rpname) addToMap(rpname, rpid)
+              if (rpid && rpname) addToMap(rpname, rpid, 1, 2)
             })
           })
         }
@@ -131,7 +132,7 @@ app.get('/buscar', async (req, res) => {
           if (!obj || typeof obj !== 'object' || depth > 6) return
           if (obj.page_id && obj.page_name) {
             const pid = String(obj.page_id)
-            if (/^\d+$/.test(pid)) addToMap(obj.page_name, pid)
+            if (/^\d+$/.test(pid)) addToMap(obj.page_name, pid, 1, 2)
           }
           for (const v of Object.values(obj)) {
             if (Array.isArray(v)) v.forEach(i => findPageIds(i, depth + 1))
@@ -303,15 +304,18 @@ app.get('/buscar', async (req, res) => {
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
       const info = pageIdMap[name] || {}
-      // Prioridade: filter autocomplete/GraphQL → link do perfil no DOM (numérico) → profile.php?id → URL do perfil (vanity) → fallback sintético
-      const resolvedId = info.id || domAd.pageIdFromLink || null
-      // Extrai vanity do profileUrl se existir (ex: "cocacolabr" de "facebook.com/cocacolabr")
-      const profileFacebookUrl = !resolvedId && domAd.profileUrl ? domAd.profileUrl : ''
+      // Prioridade:
+      // 1. Source 1 (filter autocomplete) → view_all_page_id confiável
+      // 2. DOM profileUrl → Facebook profile (não Ad Library, mas vai pra página certa)
+      // 3. Vanity → tentativa view_all_page_id=vanity
+      // 4. Fallback → searchUrl original
+      const filterId = info.source === 1 ? info.id : null
+      const profileFacebookUrl = domAd.profileUrl || ''
       const vanityMatch = profileFacebookUrl
         ? profileFacebookUrl.match(/facebook\.com\/([^/?]+)/)
         : null
       const vanityName = vanityMatch ? vanityMatch[1] : null
-      const pageId = resolvedId || (vanityName ? `vanity_${vanityName}` : `dom_${i}`)
+      const pageId = filterId || (vanityName ? `vanity_${vanityName}` : `dom_${i}`)
 
       const isWhatsApp = !!(domAd.landingUrl && (
         domAd.landingUrl.includes('api.whatsapp') ||
@@ -321,10 +325,11 @@ app.get('/buscar', async (req, res) => {
 
       // Constrói URL da melhor forma possível
       let pageUrl
-      if (resolvedId) {
-        pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${resolvedId}`
+      if (filterId) {
+        pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${filterId}`
+      } else if (profileFacebookUrl) {
+        pageUrl = profileFacebookUrl
       } else if (vanityName) {
-        // Tentativa com view_all_page_id=vanity (pode funcionar)
         pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${vanityName}`
       } else {
         pageUrl = searchUrl
