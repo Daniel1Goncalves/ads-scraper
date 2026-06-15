@@ -245,12 +245,22 @@ app.get('/buscar', async (req, res) => {
 
           // Page ID extraído do link do perfil facebook.com/[NUMERIC_ID]/
           let pageIdFromLink = ''
+          let profileUrl = ''
           for (const a of card.querySelectorAll('a[href*="facebook.com"]')) {
-            const m = a.href.match(/facebook\.com\/(\d{8,})\/?/)
+            const href = a.href
+            // Tenta extrair ID numérico do link direto: facebook.com/12345678/
+            let m = href.match(/facebook\.com\/(\d{8,})\/?/)
             if (m) { pageIdFromLink = m[1]; break }
+            // Tenta extrair ID de profile.php?id=
+            m = href.match(/facebook\.com\/profile\.php\?id=(\d+)/)
+            if (m) { pageIdFromLink = m[1]; break }
+            // Se não achou ID numérico, guarda a URL do perfil (vanity) como fallback
+            if (!profileUrl && href.includes('facebook.com')) {
+              profileUrl = href
+            }
           }
 
-          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText, pageIdFromLink })
+          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText, pageIdFromLink, profileUrl })
         } catch {}
       })
 
@@ -265,16 +275,21 @@ app.get('/buscar', async (req, res) => {
     const profiles = []
 
     rawAds.forEach((domAd, i) => {
-      const name = domAd.pageName
+      const name = domAd.pageName.trim()
       if (!name || seenNames.has(name)) return
       seenNames.add(name)
 
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
       const info = pageIdMap[name] || {}
-      // Prioridade: filter autocomplete → link do perfil no DOM → fallback sintético
+      // Prioridade: filter autocomplete/GraphQL → link do perfil no DOM (numérico) → profile.php?id → URL do perfil (vanity) → fallback sintético
       const resolvedId = info.id || domAd.pageIdFromLink || null
-      const pageId = resolvedId || `dom_${i}`
+      // Extrai vanity do profileUrl se existir (ex: "cocacolabr" de "facebook.com/cocacolabr")
+      const vanityMatch = !resolvedId && domAd.profileUrl
+        ? domAd.profileUrl.match(/facebook\.com\/([^/?]+)/)
+        : null
+      const vanityName = vanityMatch ? vanityMatch[1] : null
+      const pageId = resolvedId || (vanityName ? `vanity_${vanityName}` : `dom_${i}`)
 
       const isWhatsApp = !!(domAd.landingUrl && (
         domAd.landingUrl.includes('api.whatsapp') ||
@@ -282,9 +297,16 @@ app.get('/buscar', async (req, res) => {
         domAd.landingUrl.includes('whatsapp.com/send')
       ))
 
-      const pageUrl = resolvedId
-        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${resolvedId}`
-        : searchUrl
+      // Constrói URL da melhor forma possível
+      let pageUrl
+      if (resolvedId) {
+        pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${resolvedId}`
+      } else if (vanityName) {
+        // Tentativa com view_all_page_id=vanity (pode funcionar)
+        pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${vanityName}`
+      } else {
+        pageUrl = searchUrl
+      }
       const days = parseDays(domAd.dateText)
       const adObj = {
         id: `ad_${Date.now()}_${i}`,
