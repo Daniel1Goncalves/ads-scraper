@@ -246,6 +246,14 @@ app.get('/buscar', async (req, res) => {
             if (t.match(/\d+\s*de\s+\w+\s+de\s+\d{4}/) && t.length < 80) dateText = t
           })
 
+          // Identificação da biblioteca (ID do anúncio) — aparece como texto no card
+          // Ex: "Identificação da biblioteca: 27389241924003618"
+          let adLibraryId = ''
+          const fullText = card.innerText || card.textContent || ''
+          const libMatch = fullText.match(/Identificação da biblioteca[:\s]+(\d{10,})/i)
+            || fullText.match(/Library ID[:\s]+(\d{10,})/i)
+          if (libMatch) adLibraryId = libMatch[1]
+
           // Page ID e URL do perfil extraídos dos links do card
           // IMPORTANTE: NÃO usa break — precisa capturar tanto pageIdFromLink quanto profileUrl
           let pageIdFromLink = ''
@@ -277,7 +285,7 @@ app.get('/buscar', async (req, res) => {
             }
           }
 
-          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText, pageIdFromLink, profileUrl })
+          if (pageName) results.push({ pageName, adText, landingUrl, thumbnail, dateText, pageIdFromLink, profileUrl, adLibraryId })
         } catch {}
       })
 
@@ -310,9 +318,14 @@ app.get('/buscar', async (req, res) => {
         domAd.landingUrl.includes('whatsapp.com/send')
       ))
 
-      // Se tem libraryId → URL da biblioteca; senão → null (dashboard mostra "Ver Página")
+      // 1. Filter ID → todos os anúncios do anunciante (melhor)
+      // 2. Ad Library ID do card → anúncio específico (também correto)
+      // 3. null → dashboard mostra "Ver Página" com link do perfil
+      const adLibId = domAd.adLibraryId || null
       const pageUrl = libraryId
         ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${libraryId}`
+        : adLibId
+        ? `https://www.facebook.com/ads/library/?id=${adLibId}`
         : null
       const days = parseDays(domAd.dateText)
       const adObj = {
