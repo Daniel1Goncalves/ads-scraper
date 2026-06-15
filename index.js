@@ -175,15 +175,22 @@ app.get('/buscar', async (req, res) => {
       const results = []
       const seen = new Set()
 
-      // Coleta todos os "Identificação da biblioteca" da página em ordem
-      // Eles aparecem uma vez por card, na mesma ordem dos cards
+      // Coleta todos os "Identificação da biblioteca" da página em ordem de aparição
       const allLibIds = []
-      document.querySelectorAll('span, div').forEach(el => {
-        if (el.children.length > 0) return
-        const t = el.textContent || ''
-        const m = t.match(/^(\d{15,20})$/)
-        if (m) allLibIds.push(m[1])
-      })
+      const pageText = document.body.innerText || ''
+      const libRegex = /Identificação da biblioteca[:\s]*(\d{10,})/gi
+      let libMatch
+      while ((libMatch = libRegex.exec(pageText)) !== null) {
+        allLibIds.push(libMatch[1])
+      }
+      // Fallback: procura números de 15-18 dígitos isolados em spans (Library ID format)
+      if (allLibIds.length === 0) {
+        document.querySelectorAll('span').forEach(el => {
+          if (el.children.length > 0) return
+          const t = (el.textContent || '').trim()
+          if (/^\d{15,18}$/.test(t)) allLibIds.push(t)
+        })
+      }
 
       const spans = Array.from(document.querySelectorAll('span'))
       const sponsoredEls = spans.filter(s => s.textContent.trim() === 'Patrocinado' || s.textContent.trim() === 'Sponsored')
