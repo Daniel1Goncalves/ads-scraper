@@ -381,9 +381,9 @@ app.get('/buscar', async (req, res) => {
     const final = profiles.slice(0, 50).map(p => { const { _fbUrl, ...rest } = p; return rest })
 
     // Log resumo dos tipos de page_id
-    const numNum = final.filter((p: any) => p.page_id && /^\d+$/.test(p.page_id)).length
-    const numVanity = final.filter((p: any) => p.page_id && p.page_id.startsWith('vanity_')).length
-    const numDom = final.filter((p: any) => p.page_id && p.page_id.startsWith('dom_')).length
+    const numNum = final.filter(p => p.page_id && /^\d+$/.test(p.page_id)).length
+    const numVanity = final.filter(p => p.page_id && p.page_id.startsWith('vanity_')).length
+    const numDom = final.filter(p => p.page_id && p.page_id.startsWith('dom_')).length
     console.log(`[buscar] pageIdMap=${Object.keys(pageIdMap).length} dom=${rawAds.length} final=${final.length} | num=${numNum} vanity=${numVanity} dom=${numDom}`)
     res.json({ profiles: final })
 
