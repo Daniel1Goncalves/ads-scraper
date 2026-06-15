@@ -335,7 +335,7 @@ app.get('/buscar', async (req, res) => {
         oldest_ad_days: days,
         top_ad: adObj,
         ads: [adObj],
-        _fbUrl: profileFacebookUrl || undefined,
+        _fbUrl: domAd.profileUrl || undefined,
       })
     })
 
