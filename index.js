@@ -299,10 +299,10 @@ app.get('/buscar', async (req, res) => {
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
       const info = pageIdMap[name] || {}
-      // Apenas o filter autocomplete do GraphQL tem o ID correto para view_all_page_id
-      // IDs do DOM (profile links) são IDs do perfil Facebook — diferentes dos IDs da biblioteca
-      const libraryId = info.id || null
-      const pageId = libraryId || domAd.pageIdFromLink || `dom_${i}`
+      // Prioridade de ID: filter autocomplete > link numérico do DOM > fallback
+      // Ambos testados no formato view_all_page_id= da biblioteca de anúncios
+      const resolvedId = info.id || domAd.pageIdFromLink || null
+      const pageId = resolvedId || `dom_${i}`
 
       const isWhatsApp = !!(domAd.landingUrl && (
         domAd.landingUrl.includes('api.whatsapp') ||
@@ -310,8 +310,8 @@ app.get('/buscar', async (req, res) => {
         domAd.landingUrl.includes('whatsapp.com/send')
       ))
 
-      const pageUrl = libraryId
-        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${libraryId}`
+      const pageUrl = resolvedId
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${resolvedId}`
         : searchUrl
       const days = parseDays(domAd.dateText)
       const adObj = {
