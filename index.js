@@ -94,10 +94,18 @@ app.get('/buscar', async (req, res) => {
         const text = await response.text()
         const json = JSON.parse(text.startsWith('for (;;);') ? text.slice(9) : text)
 
+        // Helper para adicionar ao pageIdMap com nome normalizado (trim)
+        const addToMap = (rawName, id, count = 1) => {
+          const key = rawName.trim()
+          if (key && id && !pageIdMap[key]) {
+            pageIdMap[key] = { id: String(id), count }
+          }
+        }
+
         // Fonte 1: filtros laterais (autocomplete)
         const pages = json?.data?.ad_library_main?.dynamic_filter_options?.pages
         if (pages) {
-          pages.forEach(p => { if (p.key && p.display_name) pageIdMap[p.display_name] = { id: p.key, count: p.count || 1 } })
+          pages.forEach(p => { if (p.key && p.display_name) addToMap(p.display_name, p.key, p.count) })
         }
 
         // Fonte 2: resultados dos anúncios (contém page_id de cada ad)
@@ -108,16 +116,12 @@ app.get('/buscar', async (req, res) => {
             if (!node) return
             const pid = node.page_id || node.page?.id
             const pname = node.page_name || node.page?.name
-            if (pid && pname && !pageIdMap[pname]) {
-              pageIdMap[pname] = { id: String(pid), count: 1 }
-            }
+            if (pid && pname) addToMap(pname, pid)
             // Às vezes está em collated_results
             ;(node.collated_results || []).forEach((r) => {
               const rpid = r.page_id || r.page?.id
               const rpname = r.page_name || r.page?.name
-              if (rpid && rpname && !pageIdMap[rpname]) {
-                pageIdMap[rpname] = { id: String(rpid), count: 1 }
-              }
+              if (rpid && rpname) addToMap(rpname, rpid)
             })
           })
         }
@@ -127,9 +131,7 @@ app.get('/buscar', async (req, res) => {
           if (!obj || typeof obj !== 'object' || depth > 6) return
           if (obj.page_id && obj.page_name) {
             const pid = String(obj.page_id)
-            if (/^\d+$/.test(pid) && !pageIdMap[obj.page_name]) {
-              pageIdMap[obj.page_name] = { id: pid, count: 1 }
-            }
+            if (/^\d+$/.test(pid)) addToMap(obj.page_name, pid)
           }
           for (const v of Object.values(obj)) {
             if (Array.isArray(v)) v.forEach(i => findPageIds(i, depth + 1))
@@ -244,19 +246,38 @@ app.get('/buscar', async (req, res) => {
           })
 
           // Page ID extraído do link do perfil facebook.com/[NUMERIC_ID]/
+          // IMPORTANTE: ignora links de tracking (l.php, m.facebook, etc.) que contêm IDs falsos
           let pageIdFromLink = ''
           let profileUrl = ''
           for (const a of card.querySelectorAll('a[href*="facebook.com"]')) {
             const href = a.href
+            const isTracking = href.includes('/l.php') || href.startsWith('https://l.') || href.startsWith('http://l.')
+            const isContentLink = href.includes('/posts/') || href.includes('/photos/') || href.includes('/videos/') || href.includes('/reels/') || href.includes('/sharer/') || href.includes('/plugins/') || href.includes('/share/')
+            // Pula links de tracking e conteúdo — NUNCA são o perfil da página
+            if (isTracking || isContentLink) continue
+
             // Tenta extrair ID numérico do link direto: facebook.com/12345678/
             let m = href.match(/facebook\.com\/(\d{8,})\/?/)
-            if (m) { pageIdFromLink = m[1]; break }
+            if (m) {
+              // Só aceita se for www.facebook.com ou facebook.com (não subdomínio de tracking)
+              const domain = href.match(/https?:\/\/([^\/]+)/)
+              if (domain && (domain[1] === 'www.facebook.com' || domain[1] === 'facebook.com' || domain[1] === 'web.facebook.com')) {
+                pageIdFromLink = m[1]; break
+              }
+              // Subdomínio como m.facebook.com: usa como fallback se não tiver nada
+              if (!pageIdFromLink) pageIdFromLink = m[1]
+              continue
+            }
             // Tenta extrair ID de profile.php?id=
             m = href.match(/facebook\.com\/profile\.php\?id=(\d+)/)
             if (m) { pageIdFromLink = m[1]; break }
-            // Se não achou ID numérico, guarda a URL do perfil (vanity) como fallback
-            if (!profileUrl && href.includes('facebook.com')) {
-              profileUrl = href
+
+            // Guarda URL do perfil (vanity) como fallback — só de www.facebook.com
+            if (!profileUrl && !isTracking && !isContentLink) {
+              const domain = href.match(/https?:\/\/([^\/]+)/)
+              if (domain && (domain[1] === 'www.facebook.com' || domain[1] === 'facebook.com' || domain[1] === 'web.facebook.com')) {
+                profileUrl = href
+              }
             }
           }
 
