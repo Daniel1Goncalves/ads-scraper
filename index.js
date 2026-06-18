@@ -438,6 +438,76 @@ app.get('/buscar', async (req, res) => {
   }
 })
 
+// Teste de resolução vanity — verifica se fb://page/ID aparece no HTML
+app.get('/test-vanity', async (req, res) => {
+  const { url } = req.query
+  if (!url) return res.status(400).json({ error: 'URL obrigatória' })
+  let browser
+  try {
+    browser = await getBrowser()
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      locale: 'pt-BR',
+      viewport: { width: 1280, height: 900 },
+    })
+    const page = await context.newPage()
+    await page.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => false }) })
+
+    // Método 1: fetch dentro do browser (mesmo código do /buscar)
+    let fetchHtml = '', fetchResult = ''
+    try {
+      fetchHtml = await page.evaluate(async (fbUrl) => {
+        const r = await fetch(fbUrl, { redirect: 'follow', credentials: 'include' })
+        return await r.text()
+      }, url)
+      const m = fetchHtml.match(/fb:\/\/page\/(\d+)/)
+      fetchResult = m ? `OK: found id ${m[1]}` : 'FAIL: fb://page/ID not found'
+    } catch (e) { fetchResult = `ERROR: ${e.message}` }
+
+    // Método 2: navegação direta (page.goto) e pega o HTML
+    let gotoHtml = '', gotoResult = ''
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 })
+      await page.waitForTimeout(2000)
+      gotoHtml = await page.content()
+      const m = gotoHtml.match(/fb:\/\/page\/(\d+)/)
+      gotoResult = m ? `OK: found id ${m[1]}` : 'FAIL: fb://page/ID not found'
+    } catch (e) { gotoResult = `ERROR: ${e.message}` }
+
+    await context.close()
+    res.json({
+      url,
+      fetch: {
+        success: !fetchResult.startsWith('ERROR'),
+        result: fetchResult,
+        html_length: fetchHtml.length,
+        has_page_id: !!fetchHtml.match(/fb:\/\/page\/(\d+)/),
+        // Mostra trechos que contêm "page" ou "fb://"
+        snippets: [
+          fetchHtml.slice(0, 500),
+          fetchHtml.slice(Math.max(0, fetchHtml.indexOf('fb://') - 100), fetchHtml.indexOf('fb://') + 200).substring(0, 300) || 'fb:// not found',
+          fetchHtml.slice(-300),
+        ],
+      },
+      goto: {
+        success: !gotoResult.startsWith('ERROR'),
+        result: gotoResult,
+        html_length: gotoHtml.length,
+        has_page_id: !!gotoHtml.match(/fb:\/\/page\/(\d+)/),
+        snippets: [
+          gotoHtml.slice(0, 500),
+          gotoHtml.slice(Math.max(0, gotoHtml.indexOf('fb://') - 100), gotoHtml.indexOf('fb://') + 200).substring(0, 300) || 'fb:// not found',
+          gotoHtml.slice(-300),
+        ],
+      },
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  } finally {
+    if (browser) await browser.close()
+  }
+})
+
 // Busca por URL da biblioteca
 app.get('/buscar-url', async (req, res) => {
   const { url } = req.query
