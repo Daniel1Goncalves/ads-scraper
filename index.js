@@ -392,7 +392,7 @@ app.get('/buscar', async (req, res) => {
     })
 
     // Resolve perfis sem ID numérico (vanity/dom) para page_ids da Ad Library
-    // Faz fetch da página do Facebook dentro do browser e extrai page_id numérico
+    // Navega até a página do Facebook e extrai o ID do meta tag al:android:url
     const unresolvedProfiles = profiles.filter(p => {
       const hasNumId = p.page_id && /^\d+$/.test(p.page_id)
       return !hasNumId && p._fbUrl
@@ -402,11 +402,12 @@ app.get('/buscar', async (req, res) => {
       for (const p of unresolvedProfiles) {
         const fbUrl = p._fbUrl
         try {
-          const html = await page.evaluate(async (url) => {
-            const r = await fetch(url, { redirect: 'follow', credentials: 'include' })
-            return await r.text()
-          }, fbUrl)
-          const m = html.match(/fb:\/\/page\/(\d+)/)
+          // Navega para a página do Facebook (renderiza JS, diferente de fetch)
+          await page.goto(fbUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
+          await page.waitForTimeout(1500)
+          const html = await page.content()
+          // Meta tag: <meta property="al:android:url" content="fb://profile/123456789">
+          const m = html.match(/fb:\/\/profile\/(\d+)/) || html.match(/fb:\/\/page\/(\d+)/)
           if (m) {
             const numId = m[1]
             p.page_id = numId
@@ -414,7 +415,7 @@ app.get('/buscar', async (req, res) => {
             if (p.top_ad) p.top_ad.page_url = p.page_url
             console.log(`[buscar] resolvido: ${p.page_name} → ${numId}`)
           } else {
-            console.log(`[buscar] ${p.page_name}: página sem fb://page/ID (html: ${html.length})`)
+            console.log(`[buscar] ${p.page_name}: sem fb://profile/ID (html: ${html.length})`)
           }
         } catch (e) {
           console.log(`[buscar] erro ao resolver ${p.page_name}: ${e.message}`)
