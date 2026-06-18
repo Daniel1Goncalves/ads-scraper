@@ -708,9 +708,9 @@ app.get('/diagnostico', async (req, res) => {
         const cardAttrs = {}
         Array.from(card.attributes || []).forEach(a => { cardAttrs[a.name] = a.value.slice(0, 200) })
 
-        // Procura data-testid ou data-* com library/ad
+        // Procura data-testid ou outros data-* com library/ad
         const dataAttrs = {}
-        card.querySelectorAll('[data-*]').forEach(el => {
+        card.querySelectorAll('[data-testid], [data-ad], [data-page], [data-id]').forEach(el => {
           Array.from(el.attributes).forEach(a => {
             if (a.name.startsWith('data-')) dataAttrs[a.name] = a.value.slice(0, 100)
           })
