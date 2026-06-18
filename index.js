@@ -241,16 +241,17 @@ app.get('/buscar', async (req, res) => {
 
           // Landing page URL (extrai de l.php tracking links primeiro)
           let landingUrl = ''
-          for (const a of card.querySelectorAll('a[href]')) {
+          const allLinks = Array.from(card.querySelectorAll('a[href]'))
+          for (const a of allLinks) {
             const h = a.href
             const lMatch = h.match(/l\.facebook\.com\/l\.php\?u=([^&]+)/)
             if (lMatch) {
-              try { landingUrl = decodeURIComponent(lMatch[1]) } catch { landingUrl = h }
+              try { landingUrl = decodeURIComponent(lMatch[1]) } catch (e) { landingUrl = h }
               break
             }
           }
           if (!landingUrl) {
-            for (const a of card.querySelectorAll('a[href]')) {
+            for (const a of allLinks) {
               const h = a.href
               if (h.startsWith('http') && !h.includes('facebook.com') && !h.includes('instagram.com')) {
                 landingUrl = h; break
