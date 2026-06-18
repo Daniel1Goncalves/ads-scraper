@@ -239,14 +239,24 @@ app.get('/buscar', async (req, res) => {
             }
           })
 
-          // Landing page URL
+          // Landing page URL (extrai de l.php tracking links primeiro)
           let landingUrl = ''
-          card.querySelectorAll('a[href]').forEach(a => {
+          for (const a of card.querySelectorAll('a[href]')) {
             const h = a.href
-            if (h && !h.includes('facebook.com') && !h.includes('instagram.com') && h.startsWith('http')) {
-              landingUrl = h
+            const lMatch = h.match(/l\.facebook\.com\/l\.php\?u=([^&]+)/)
+            if (lMatch) {
+              try { landingUrl = decodeURIComponent(lMatch[1]) } catch { landingUrl = h }
+              break
             }
-          })
+          }
+          if (!landingUrl) {
+            for (const a of card.querySelectorAll('a[href]')) {
+              const h = a.href
+              if (h.startsWith('http') && !h.includes('facebook.com') && !h.includes('instagram.com')) {
+                landingUrl = h; break
+              }
+            }
+          }
 
           // Thumbnail
           let thumbnail = '', maxArea = 0
@@ -319,8 +329,6 @@ app.get('/buscar', async (req, res) => {
       if (shouldExclude(name, domAd.adText || '', domAd.landingUrl || '')) return
 
       const info = pageIdMap[name] || {}
-      // SOMENTE o filter autocomplete do GraphQL tem o ID válido para view_all_page_id
-      // O ID do link do DOM (facebook.com/ID/) é o ID da página FB — não funciona na biblioteca
       const libraryId = info.id || null
       const pageId = libraryId || domAd.pageIdFromLink || `dom_${i}`
 
@@ -330,14 +338,15 @@ app.get('/buscar', async (req, res) => {
         domAd.landingUrl.includes('whatsapp.com/send')
       ))
 
-      // 1. Filter ID → todos os anúncios do anunciante (melhor)
-      // 2. Ad Library ID do card → anúncio específico (também correto)
-      // 3. null → dashboard mostra "Ver Página" com link do perfil
       const adLibId = domAd.adLibraryId || null
+      // Fallback: usa o link do perfil do Facebook quando não tem libraryId
+      const fbProfileUrl = domAd.profileUrl || null
       const pageUrl = libraryId
         ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${libraryId}`
         : adLibId
         ? `https://www.facebook.com/ads/library/?id=${adLibId}`
+        : fbProfileUrl
+        ? fbProfileUrl  // fallback: link do perfil FB, nunca null
         : null
       const days = parseDays(domAd.dateText)
       const adObj = {
@@ -361,7 +370,7 @@ app.get('/buscar', async (req, res) => {
         oldest_ad_days: days,
         top_ad: adObj,
         ads: [adObj],
-        _fbUrl: domAd.profileUrl || undefined,
+        _fbUrl: fbProfileUrl,
       })
     })
 
@@ -381,13 +390,16 @@ app.get('/buscar', async (req, res) => {
       })
     })
 
-    // Tenta resolver vanity URLs para page_ids numéricos (fetch dentro do browser, compartilha cookies)
-    const vanityProfiles = profiles.filter(p => p.page_id && p.page_id.startsWith('vanity_'))
-    if (vanityProfiles.length > 0) {
-      console.log(`[buscar] resolvendo ${vanityProfiles.length} vanity URLs...`)
-      for (const p of vanityProfiles) {
+    // Resolve perfis sem ID numérico (vanity/dom) para page_ids da Ad Library
+    // Faz fetch da página do Facebook dentro do browser e extrai page_id numérico
+    const unresolvedProfiles = profiles.filter(p => {
+      const hasNumId = p.page_id && /^\d+$/.test(p.page_id)
+      return !hasNumId && p._fbUrl
+    })
+    if (unresolvedProfiles.length > 0) {
+      console.log(`[buscar] resolvendo ${unresolvedProfiles.length} perfis (vanity/dom)...`)
+      for (const p of unresolvedProfiles) {
         const fbUrl = p._fbUrl
-        if (!fbUrl) { console.log(`[buscar] ${p.page_name}: sem _fbUrl`); continue }
         try {
           const html = await page.evaluate(async (url) => {
             const r = await fetch(url, { redirect: 'follow', credentials: 'include' })
@@ -399,9 +411,9 @@ app.get('/buscar', async (req, res) => {
             p.page_id = numId
             p.page_url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BR&search_type=page&view_all_page_id=${numId}`
             if (p.top_ad) p.top_ad.page_url = p.page_url
-            console.log(`[buscar] vanity resolvido: ${p.page_name} → ${numId}`)
+            console.log(`[buscar] resolvido: ${p.page_name} → ${numId}`)
           } else {
-            console.log(`[buscar] ${p.page_name}: página não tinha fb://page/ID no HTML (html length: ${html.length})`)
+            console.log(`[buscar] ${p.page_name}: página sem fb://page/ID (html: ${html.length})`)
           }
         } catch (e) {
           console.log(`[buscar] erro ao resolver ${p.page_name}: ${e.message}`)
@@ -413,9 +425,8 @@ app.get('/buscar', async (req, res) => {
 
     // Log resumo dos tipos de page_id
     const numNum = final.filter(p => p.page_id && /^\d+$/.test(p.page_id)).length
-    const numVanity = final.filter(p => p.page_id && p.page_id.startsWith('vanity_')).length
-    const numDom = final.filter(p => p.page_id && p.page_id.startsWith('dom_')).length
-    console.log(`[buscar] pageIdMap=${Object.keys(pageIdMap).length} dom=${rawAds.length} final=${final.length} | num=${numNum} vanity=${numVanity} dom=${numDom}`)
+    const numUrlNull = final.filter(p => !p.page_url).length
+    console.log(`[buscar] pageIdMap=${Object.keys(pageIdMap).length} dom=${rawAds.length} final=${final.length} | num=${numNum} nullUrl=${numUrlNull}`)
     res.json({ profiles: final })
 
   } catch (err) {
